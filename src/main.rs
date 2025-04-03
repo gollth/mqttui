@@ -1,4 +1,5 @@
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, KeyCode, KeyEventKind};
+use model::{Event, Model};
 use mqttui::*;
 
 fn main() -> anyhow::Result<()> {
@@ -8,24 +9,28 @@ fn main() -> anyhow::Result<()> {
     result?;
     Ok(())
 }
-fn run(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
-    loop {
-        terminal.draw(|frame| ui::render(frame))?;
-        if handle_events()? {
-            break Ok(());
+fn run(terminal: &mut ratatui::DefaultTerminal) -> anyhow::Result<()> {
+    let mut model = Model::default();
+    while !model.shutdown {
+        terminal.draw(|frame| ui::render(frame, &model))?;
+
+        let mut event = handle()?;
+        while let Some(e) = event {
+            event = model::update(&mut model, e);
         }
     }
+    Ok(())
 }
 
-fn handle_events() -> std::io::Result<bool> {
+fn handle() -> anyhow::Result<Option<Event>> {
     match event::read()? {
-        Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-            KeyCode::Char('q') => return Ok(true),
-            // handle other key events
+        crossterm::event::Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+            KeyCode::Char('q') => return Ok(Some(Event::Quit)),
+            KeyCode::Up => return Ok(Some(Event::Up)),
+            KeyCode::Down => return Ok(Some(Event::Down)),
             _ => {}
         },
-        // handle other events
         _ => {}
     }
-    Ok(false)
+    Ok(None)
 }

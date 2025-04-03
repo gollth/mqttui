@@ -1,20 +1,27 @@
-use crossterm::event::{self, KeyCode, KeyEventKind};
+use anyhow::anyhow;
+use crossterm::event::{Event as CrossEvent, EventStream, KeyCode, KeyEventKind};
+use futures::{FutureExt, StreamExt};
 use model::{Event, Model};
 use mqttui::*;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal);
+    let result = run(&mut terminal).await;
     ratatui::restore();
     result?;
     Ok(())
 }
-fn run(terminal: &mut ratatui::DefaultTerminal) -> anyhow::Result<()> {
+
+async fn run(terminal: &mut ratatui::DefaultTerminal) -> anyhow::Result<()> {
     let mut model = Model::default();
+    let mut events = EventHandler::new();
+    let _client = mqtt::Client::new("localhost", events.sender()).await?;
     while !model.shutdown {
         terminal.draw(|frame| ui::render(frame, &model))?;
 
-        let mut event = handle()?;
+        let mut event = Some(events.next().await?);
         while let Some(e) = event {
             event = model::update(&mut model, e);
         }
@@ -22,15 +29,40 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn handle() -> anyhow::Result<Option<Event>> {
-    match event::read()? {
-        crossterm::event::Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-            KeyCode::Char('q') => return Ok(Some(Event::Quit)),
-            KeyCode::Up => return Ok(Some(Event::Up)),
-            KeyCode::Down => return Ok(Some(Event::Down)),
-            _ => {}
-        },
-        _ => {}
+struct EventHandler {
+    rx: UnboundedReceiver<Event>,
+    tx: UnboundedSender<Event>,
+}
+
+impl EventHandler {
+    pub fn new() -> Self {
+        let (tx, rx) = unbounded_channel();
+        tokio::spawn(Self::run(tx.clone()));
+        Self { rx, tx }
     }
-    Ok(None)
+
+    pub fn sender(&self) -> UnboundedSender<Event> {
+        self.tx.clone()
+    }
+
+    pub async fn next(&mut self) -> anyhow::Result<Event> {
+        self.rx.recv().await.ok_or(anyhow!("Async runtime died"))
+    }
+
+    async fn run(tx: UnboundedSender<Event>) -> anyhow::Result<()> {
+        let mut stream = EventStream::new();
+        while let Some(Ok(CrossEvent::Key(key))) = stream.next().fuse().await {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+
+            match key.code {
+                KeyCode::Char('q') => tx.send(Event::Quit)?,
+                KeyCode::Up => tx.send(Event::Up)?,
+                KeyCode::Down => tx.send(Event::Down)?,
+                _ => {}
+            }
+        }
+        anyhow::bail!("could not read next event")
+    }
 }

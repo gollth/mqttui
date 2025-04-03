@@ -1,4 +1,4 @@
-use anyhow::anyhow;
+use color_eyre::{Result, eyre};
 use crossterm::event::{Event as CrossEvent, EventStream, KeyCode, KeyEventKind};
 use futures::{FutureExt, StreamExt};
 use model::{Event, Model};
@@ -6,7 +6,13 @@ use mqttui::*;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
+    color_eyre::install()?;
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        ratatui::restore();
+        hook(panic_info);
+    }));
     let mut terminal = ratatui::init();
     let result = run(&mut terminal).await;
     ratatui::restore();
@@ -14,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run(terminal: &mut ratatui::DefaultTerminal) -> anyhow::Result<()> {
+async fn run(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
     let mut model = Model::default();
     let mut events = EventHandler::new();
     let _client = mqtt::Client::new("localhost", events.sender()).await?;
@@ -45,11 +51,14 @@ impl EventHandler {
         self.tx.clone()
     }
 
-    pub async fn next(&mut self) -> anyhow::Result<Event> {
-        self.rx.recv().await.ok_or(anyhow!("Async runtime died"))
+    pub async fn next(&mut self) -> Result<Event> {
+        self.rx
+            .recv()
+            .await
+            .ok_or(eyre::Report::msg("Async runtime died"))
     }
 
-    async fn run(tx: UnboundedSender<Event>) -> anyhow::Result<()> {
+    async fn run(tx: UnboundedSender<Event>) -> Result<()> {
         let mut stream = EventStream::new();
         while let Some(Ok(CrossEvent::Key(key))) = stream.next().fuse().await {
             if key.kind != KeyEventKind::Press {
@@ -63,6 +72,6 @@ impl EventHandler {
                 _ => {}
             }
         }
-        anyhow::bail!("could not read next event")
+        Err(eyre::Report::msg("could not read next event"))
     }
 }

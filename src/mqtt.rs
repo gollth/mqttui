@@ -1,3 +1,4 @@
+use color_eyre::Result;
 use rumqttc::{AsyncClient, Incoming, MqttOptions, QoS};
 use tokio::{
     sync::mpsc::UnboundedSender,
@@ -8,11 +9,11 @@ use crate::model::Event;
 
 pub struct Client {
     inner: AsyncClient,
-    handle: JoinHandle<anyhow::Result<()>>,
+    handle: JoinHandle<Result<()>>,
 }
 
 impl Client {
-    pub async fn new(host: &str, tx: UnboundedSender<Event>) -> anyhow::Result<Self> {
+    pub async fn new(host: &str, tx: UnboundedSender<Event>) -> Result<Self> {
         let name = env!("CARGO_PKG_NAME");
         let (inner, mut connection) = AsyncClient::new(MqttOptions::new(name, host, 1883), 10);
 

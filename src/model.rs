@@ -3,6 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use clipboard::{ClipboardContext, ClipboardProvider};
+use color_eyre::{Result, eyre::eyre};
 use enum_as_inner::EnumAsInner;
 use ratatui::{style::Color, widgets::ListState};
 use serde_json::Value;
@@ -13,13 +15,15 @@ const FRESH: Duration = Duration::from_millis(500);
 /// Timeout after which messages considered to be stale (i.e. dark grey highlight)
 const STALE: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Default)]
 pub struct Model {
     pub shutdown: bool,
     pub counter: i32,
 
     messages: BTreeMap<Topic, Message>,
     pub state_topics: ListState,
+
+    clipboard: ClipboardContext,
+    snackbar: usize,
 }
 
 #[derive(Debug, PartialEq, EnumAsInner)]
@@ -53,9 +57,23 @@ pub struct Message {
 }
 
 impl Model {
+    pub fn new() -> Result<Self> {
+        let clipboard = ClipboardProvider::new().map_err(|e| eyre!("{e}"))?;
+        Ok(Self {
+            clipboard,
+            shutdown: false,
+            counter: 0,
+            snackbar: 0,
+            messages: Default::default(),
+            state_topics: Default::default(),
+        })
+    }
+
     pub fn update(&mut self, event: Event) {
         match event {
-            Event::Render(RenderEvent::Tick) => {}
+            Event::Render(RenderEvent::Tick) => {
+                self.snackbar = self.snackbar.saturating_sub(1);
+            }
             Event::Render(RenderEvent::Up) | Event::Render(RenderEvent::Char('k')) => {
                 self.state_topics.select_previous()
             }
@@ -64,6 +82,16 @@ impl Model {
             }
             Event::Render(RenderEvent::Back) | Event::Render(RenderEvent::Char('q')) => {
                 self.shutdown = true
+            }
+            Event::Render(RenderEvent::Char('y')) => {
+                if let Some(msg) = self
+                    .state_topics
+                    .selected()
+                    .and_then(|i| self.topics().nth(i))
+                {
+                    let _ = self.clipboard.set_contents(msg.topic.clone());
+                    self.snackbar += 5;
+                }
             }
             Event::Render(RenderEvent::Char(_)) => {}
             Event::Update(UpdateEvent::Receive(message)) => {
@@ -84,6 +112,10 @@ impl Model {
 
     pub fn topics(&self) -> impl Iterator<Item = &Message> {
         self.messages.values()
+    }
+
+    pub fn popup(&self) -> bool {
+        self.snackbar > 0
     }
 }
 

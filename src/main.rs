@@ -49,6 +49,7 @@ async fn run<B: Backend>(
         let rendering = event.is_render();
 
         model.update(event);
+        // eprintln!("{model:#?}");
 
         if rendering {
             terminal.draw(|frame| ui::render(frame, &mut model))?;

@@ -9,9 +9,9 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::task;
 use tokio::time::sleep;
 
-use crate::model::{Event, Message, RenderEvent, UpdateEvent};
+use crate::model::{Event, RenderEvent, UpdateEvent};
 
-const TICK: Duration = Duration::from_millis(250);
+const TICK: Duration = Duration::from_millis(100);
 
 pub async fn handler(client: &mut AsyncClient) -> UnboundedReceiver<Event> {
     let (tx, rx) = unbounded_channel();
@@ -38,12 +38,7 @@ fn tick() -> impl Stream<Item = Event> {
 fn messages(stream: impl Stream<Item = Option<paho_mqtt::Message>>) -> impl Stream<Item = Event> {
     stream
         .filter_map(|message| async move { message })
-        .map(|message| {
-            Event::Update(UpdateEvent::Receive(Message {
-                topic: message.topic().into(),
-                data: serde_json::from_slice(message.payload()).unwrap(),
-            }))
-        })
+        .map(|message| Event::Update(UpdateEvent::Receive(message.into())))
 }
 
 fn keys() -> impl Stream<Item = Event> {
@@ -56,9 +51,10 @@ fn keys() -> impl Stream<Item = Event> {
         })
         .filter_map(|key| async move {
             match key.code {
-                KeyCode::Char('q') => Some(Event::Render(RenderEvent::Back)),
+                KeyCode::Char(c) => Some(Event::Render(RenderEvent::Char(c))),
                 KeyCode::Up => Some(Event::Render(RenderEvent::Up)),
                 KeyCode::Down => Some(Event::Render(RenderEvent::Down)),
+                KeyCode::Esc => Some(Event::Render(RenderEvent::Back)),
                 _ => None,
             }
         })

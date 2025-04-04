@@ -1,0 +1,34 @@
+include:
+  - project: "devops/ci-cd-templates"
+    file:
+      - "templates.yml"
+
+stages:
+  - build
+  - test
+  - codestyle
+
+build:
+  stage: build
+  image: ${REGISTRY_URL}/fleet/fleet/rust-base:2
+  tags:
+    - shared-amd64-high
+  script:
+    - cargo build
+
+testsuite:
+  stage: test
+  image: ${REGISTRY_URL}/fleet/fleet/rust-base:2
+  tags:
+    - shared-amd64-high
+  script:
+    - cargo nextest run --no-fail-fast
+
+codestyle:
+  stage: codestyle
+  image: ${REGISTRY_URL}/fleet/fleet/rust-base:2
+  tags:
+    - shared-amd64-high
+  script:
+    - cargo clippy --no-deps -- -D warnings
+    - cargo fmt --check

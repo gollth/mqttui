@@ -43,7 +43,7 @@ async fn run<B: Backend>(
     terminal: &mut Terminal<B>,
     mut events: UnboundedReceiver<Event>,
 ) -> Result<()> {
-    let mut model = Model::default();
+    let mut model = Model::new()?;
     while !model.shutdown {
         let event = events.recv().await.ok_or(eyre!("runtime died"))?;
         let rendering = event.is_render();

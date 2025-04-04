@@ -13,7 +13,7 @@ ci:
     - shared-amd64-high
   before_script:
     - apt-get update -qq
-    - apt-get install cmake -qqy
+    - apt-get install cmake libxcb-xfixes0-dev libxcb-shape0-dev -qqy
   script:
     - cargo build
     - cargo nextest run --no-fail-fast --no-tests pass

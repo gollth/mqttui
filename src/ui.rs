@@ -1,7 +1,7 @@
 use ratatui::{
     layout::Constraint::{Fill, Length},
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
 use crate::model::Model;
@@ -27,4 +27,29 @@ pub fn render(frame: &mut Frame, model: &mut Model) {
     );
 
     frame.render_stateful_widget(list, overview, &mut model.state_topics);
+
+    if model.popup() {
+        frame.render_widget(
+            CopyPopup,
+            Rect {
+                x: area.width / 2 - 5,
+                y: area.height.saturating_sub(8),
+                width: 10,
+                height: 3,
+            },
+        );
+    }
+}
+
+#[derive(Debug, Default)]
+struct CopyPopup;
+
+impl Widget for CopyPopup {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
+        Paragraph::new(" Copied")
+            .block(Block::new().borders(Borders::ALL))
+            .style(Style::new().green())
+            .render(area, buf);
+    }
 }

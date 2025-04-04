@@ -45,12 +45,12 @@ async fn run<B: Backend>(
 ) -> Result<()> {
     let mut model = Model::default();
     while !model.shutdown {
-        terminal.draw(|frame| ui::render(frame, &model))?;
+        terminal.draw(|frame| ui::render(frame, &mut model))?;
 
         let mut event = events.recv().await;
 
         while let Some(e) = event {
-            event = model::update(&mut model, e);
+            event = model.update(e);
             // println!("{model:#?}");
         }
     }

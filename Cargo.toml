@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+color-eyre = "0.6.3"
 crossterm = { version = "0.28.0", features = ["event-stream"] }
+futures = "0.3.28"
+paho-mqtt = "0.13.2"
+petname = "2.0.2"
 ratatui = "0.29.0"
 tokio = { version = "1.32.0", features = ["full"] }
 tokio-util = "0.7.9"
-futures = "0.3.28"
-rumqttc = "0.24.0"
-color-eyre = "0.6.3"
+serde = "1.0.219"
+serde_json = { version = "1.0.140", features = ["preserve_order"] }

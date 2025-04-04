@@ -4,31 +4,18 @@ include:
       - "templates.yml"
 
 stages:
-  - build
-  - test
-  - codestyle
+  - ci
 
-build:
-  stage: build
+ci:
+  stage: ci
   image: ${REGISTRY_URL}/fleet/fleet/rust-base:2
   tags:
     - shared-amd64-high
+  before_script:
+    - apt-get update -qq
+    - apt-get install cmake -qqy
   script:
     - cargo build
-
-testsuite:
-  stage: test
-  image: ${REGISTRY_URL}/fleet/fleet/rust-base:2
-  tags:
-    - shared-amd64-high
-  script:
-    - cargo nextest run --no-fail-fast
-
-codestyle:
-  stage: codestyle
-  image: ${REGISTRY_URL}/fleet/fleet/rust-base:2
-  tags:
-    - shared-amd64-high
-  script:
+    - cargo nextest run --no-fail-fast --no-tests pass
     - cargo clippy --no-deps -- -D warnings
     - cargo fmt --check

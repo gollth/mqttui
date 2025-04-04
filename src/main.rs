@@ -2,7 +2,7 @@ use color_eyre::Result;
 use model::{Event, Model};
 use mqttui::*;
 use paho_mqtt::{AsyncClient, ConnectOptions, CreateOptionsBuilder};
-use ratatui::{Terminal, backend::TestBackend, prelude::Backend};
+use ratatui::{Terminal, prelude::Backend};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 #[tokio::main]
@@ -11,6 +11,7 @@ async fn main() -> Result<()> {
     let rx = events::handler(&mut client).await;
 
     let mut terminal = ratatui::init();
+    // use ratatui::backend::TestBackend;
     // let mut terminal = Terminal::new(TestBackend::new(10, 10)).unwrap();
 
     let result = run(&mut terminal, rx).await;

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use enum_as_inner::EnumAsInner;
 use ratatui::widgets::ListState;
 use serde_json::Value;
 
@@ -12,12 +13,23 @@ pub struct Model {
     pub state_topics: ListState,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, EnumAsInner)]
 pub enum Event {
-    Quit,
+    Render(RenderEvent),
+    Update(UpdateEvent),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RenderEvent {
+    Tick,
     Up,
     Down,
-    Message(Message),
+    Back,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum UpdateEvent {
+    Receive(Message),
 }
 
 pub type Topic = String;
@@ -29,12 +41,13 @@ pub struct Message {
 }
 
 impl Model {
-    pub fn update(&mut self, event: Event) -> Option<Event> {
+    pub fn update(&mut self, event: Event) {
         match event {
-            Event::Quit => self.shutdown = true,
-            Event::Up => self.state_topics.select_previous(),
-            Event::Down => self.state_topics.select_next(),
-            Event::Message(Message { topic, data }) => {
+            Event::Render(RenderEvent::Tick) => {}
+            Event::Render(RenderEvent::Up) => self.state_topics.select_previous(),
+            Event::Render(RenderEvent::Down) => self.state_topics.select_next(),
+            Event::Render(RenderEvent::Back) => self.shutdown = true,
+            Event::Update(UpdateEvent::Receive(Message { topic, data })) => {
                 self.counter += 1;
                 self.messages
                     .entry(topic.clone())
@@ -47,7 +60,6 @@ impl Model {
                 }
             }
         }
-        None
     }
 
     pub fn topics(&self) -> impl Iterator<Item = &Topic> {

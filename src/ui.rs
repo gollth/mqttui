@@ -7,7 +7,7 @@ use ratatui::{
 use crate::model::Model;
 
 pub fn render(frame: &mut Frame, model: &mut Model) {
-    let border = Block::bordered().title("MQTTUI");
+    let border = Block::bordered().title("MqtTUI");
     let area = border.inner(frame.area());
     frame.render_widget(border, frame.area());
     let [top, overview] = Layout::vertical([Length(3), Fill(0)]).areas(area);

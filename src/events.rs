@@ -1,11 +1,17 @@
+use std::pin::pin;
+use std::time::Duration;
+
 use crossterm::event::{Event as CrossEvent, EventStream, KeyCode, KeyEventKind};
-use futures::{Stream, StreamExt, stream::select};
+use futures::{Stream, StreamExt, stream};
 use paho_mqtt::{AsyncClient, QoS};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task;
+use tokio::time::sleep;
 
-use crate::model::{Event, Message};
+use crate::model::{Event, RenderEvent, UpdateEvent};
+
+const TICK: Duration = Duration::from_millis(100);
 
 pub async fn handler(client: &mut AsyncClient) -> UnboundedReceiver<Event> {
     let (tx, rx) = unbounded_channel();
@@ -13,23 +19,26 @@ pub async fn handler(client: &mut AsyncClient) -> UnboundedReceiver<Event> {
 
     let stream = client.get_stream(None);
     task::spawn(async move {
-        let mut events = Box::pin(select(keys(), messages(stream)));
+        let events = stream::select(keys(), messages(stream));
+        let mut events = pin!(stream::select(events, tick()));
         while let Some(event) = events.next().await {
-            tx.send(event).unwrap()
+            let _ = tx.send(event);
         }
     });
     rx
 }
 
+fn tick() -> impl Stream<Item = Event> {
+    stream::unfold((), |_| async move {
+        sleep(TICK).await;
+        Some((Event::Render(RenderEvent::Tick), ()))
+    })
+}
+
 fn messages(stream: impl Stream<Item = Option<paho_mqtt::Message>>) -> impl Stream<Item = Event> {
     stream
         .filter_map(|message| async move { message })
-        .map(|message| {
-            Event::Message(Message {
-                topic: message.topic().into(),
-                data: serde_json::from_slice(message.payload()).unwrap(),
-            })
-        })
+        .map(|message| Event::Update(UpdateEvent::Receive(message.into())))
 }
 
 fn keys() -> impl Stream<Item = Event> {
@@ -42,9 +51,10 @@ fn keys() -> impl Stream<Item = Event> {
         })
         .filter_map(|key| async move {
             match key.code {
-                KeyCode::Char('q') => Some(Event::Quit),
-                KeyCode::Up => Some(Event::Up),
-                KeyCode::Down => Some(Event::Down),
+                KeyCode::Char(c) => Some(Event::Render(RenderEvent::Char(c))),
+                KeyCode::Up => Some(Event::Render(RenderEvent::Up)),
+                KeyCode::Down => Some(Event::Render(RenderEvent::Down)),
+                KeyCode::Esc => Some(Event::Render(RenderEvent::Back)),
                 _ => None,
             }
         })

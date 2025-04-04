@@ -1,4 +1,4 @@
-use color_eyre::Result;
+use color_eyre::{Result, eyre::eyre};
 use model::{Event, Model};
 use mqttui::*;
 use paho_mqtt::{AsyncClient, ConnectOptions, CreateOptionsBuilder};
@@ -45,13 +45,14 @@ async fn run<B: Backend>(
 ) -> Result<()> {
     let mut model = Model::default();
     while !model.shutdown {
-        terminal.draw(|frame| ui::render(frame, &model))?;
+        let event = events.recv().await.ok_or(eyre!("runtime died"))?;
+        let rendering = event.is_render();
 
-        let mut event = events.recv().await;
+        model.update(event);
+        // eprintln!("{model:#?}");
 
-        while let Some(e) = event {
-            event = model::update(&mut model, e);
-            // println!("{model:#?}");
+        if rendering {
+            terminal.draw(|frame| ui::render(frame, &mut model))?;
         }
     }
     Ok(())

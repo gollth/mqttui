@@ -4,6 +4,7 @@ use color_eyre::{Result, eyre::eyre};
 use mqttui::*;
 use mqttui::{events::Event, model::Model};
 use paho_mqtt::{AsyncClient, ConnectOptions, CreateOptionsBuilder};
+use petname::petname;
 use ratatui::{Terminal, prelude::Backend};
 use tokio::sync::mpsc::UnboundedReceiver;
 use url::Url;
@@ -45,7 +46,7 @@ async fn init(broker: Url) -> Result<AsyncClient> {
     let client = AsyncClient::new(
         CreateOptionsBuilder::new()
             .server_uri(broker.clone())
-            .client_id("foo")
+            .client_id(format!("mqttui-{}", petname(2, "-").unwrap()))
             .finalize(),
     )?;
     client

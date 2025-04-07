@@ -163,6 +163,15 @@ impl Model {
         for m in self.messages.values_mut() {
             m.topic.highlights = filter.highlights(&m.topic);
         }
+
+        if !self
+            .topics()
+            .any(|(topic, _)| self.selection().is_some_and(|s| s == topic))
+            && self.topics().count() > 0
+        {
+            let first = self.topics().next().map(|(topic, _)| topic.clone());
+            self.selection = first;
+        }
     }
 
     fn clear_filter(&mut self) {

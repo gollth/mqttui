@@ -6,7 +6,7 @@ use std::{
 use clipboard::{ClipboardContext, ClipboardProvider};
 use color_eyre::{Result, eyre::eyre};
 use enum_as_inner::EnumAsInner;
-use ratatui::{style::Color, widgets::ListState};
+use ratatui::style::Color;
 use serde_json::Value;
 
 /// Timeout until when messages are considered fresh (i.e. white highlight)
@@ -20,7 +20,7 @@ pub struct Model {
     pub counter: i32,
 
     messages: BTreeMap<Topic, Message>,
-    pub state_topics: ListState,
+    selection: Option<Topic>,
 
     clipboard: ClipboardContext,
     snackbar: usize,
@@ -65,7 +65,7 @@ impl Model {
             counter: 0,
             snackbar: 0,
             messages: Default::default(),
-            state_topics: Default::default(),
+            selection: Default::default(),
         })
     }
 
@@ -75,21 +75,37 @@ impl Model {
                 self.snackbar = self.snackbar.saturating_sub(1);
             }
             Event::Render(RenderEvent::Up) | Event::Render(RenderEvent::Char('k')) => {
-                self.state_topics.select_previous()
+                let previous = self
+                    .topics()
+                    .position(|t| {
+                        self.selection
+                            .as_deref()
+                            .is_some_and(|s| s == t.topic.as_str())
+                    })
+                    .map(|n| (n.saturating_sub(1)).max(0))
+                    .unwrap_or(0);
+                let next = self.topics().nth(previous).map(|t| t.topic.clone());
+                self.selection = next;
             }
             Event::Render(RenderEvent::Down) | Event::Render(RenderEvent::Char('j')) => {
-                self.state_topics.select_next()
+                let next = self
+                    .topics()
+                    .position(|t| {
+                        self.selection
+                            .as_deref()
+                            .is_some_and(|s| s == t.topic.as_str())
+                    })
+                    .map(|n| (n + 1).min(self.messages.len().saturating_sub(1)))
+                    .unwrap_or(0);
+                let next = self.topics().nth(next).map(|t| t.topic.clone());
+                self.selection = next;
             }
             Event::Render(RenderEvent::Back) | Event::Render(RenderEvent::Char('q')) => {
                 self.shutdown = true
             }
             Event::Render(RenderEvent::Char('y')) => {
-                if let Some(msg) = self
-                    .state_topics
-                    .selected()
-                    .and_then(|i| self.topics().nth(i))
-                {
-                    let _ = self.clipboard.set_contents(msg.topic.clone());
+                if let Some(msg) = self.selection.as_deref() {
+                    let _ = self.clipboard.set_contents(msg.into());
                     self.snackbar += 5;
                 }
             }
@@ -102,15 +118,17 @@ impl Model {
                     .or_insert(message);
 
                 if self.messages.is_empty() {
-                    self.state_topics.select(None);
-                } else if self.state_topics.selected().is_none() {
-                    self.state_topics.select(Some(0));
+                    self.selection = None;
                 }
             }
         }
     }
 
-    pub fn topics(&self) -> impl Iterator<Item = &Message> {
+    pub fn selection(&self) -> Option<&Topic> {
+        self.selection.as_ref()
+    }
+
+    pub fn topics(&self) -> impl DoubleEndedIterator<Item = &Message> {
         self.messages.values()
     }
 

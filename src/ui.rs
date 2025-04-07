@@ -17,16 +17,21 @@ pub fn render(frame: &mut Frame, model: &mut Model) {
 
     // Topic overview
     let list = List::new(model.topics().map(|message| {
-        ListItem::new(message.topic.clone()).style(Style::default().fg(message.freshness()))
+        let style = if model.selection().is_some_and(|s| &message.topic == s) {
+            Style::new().bg(Color::White).fg(Color::Black)
+        } else {
+            Style::new().fg(message.freshness())
+        };
+
+        ListItem::new(message.topic.clone()).style(style)
     }))
-    .highlight_style(Style::new().bg(Color::White).fg(Color::Black))
     .block(
         Block::new()
             .title(Line::raw("Topics").centered())
             .borders(Borders::TOP),
     );
 
-    frame.render_stateful_widget(list, overview, &mut model.state_topics);
+    frame.render_widget(list, overview);
 
     if model.popup() {
         frame.render_widget(

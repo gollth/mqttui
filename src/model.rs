@@ -34,7 +34,7 @@ pub struct Model {
     filter: Option<Filter>,
 
     clipboard: ClipboardContext,
-    snackbar: usize,
+    copy: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,7 +71,7 @@ impl Model {
             clipboard: ClipboardProvider::new().map_err(|e| eyre!("{e}"))?,
             shutdown: false,
             counter: 0,
-            snackbar: 0,
+            copy: 0,
             messages: Default::default(),
             selection: Default::default(),
             filter: Default::default(),
@@ -107,8 +107,8 @@ impl Model {
         self.filter.as_ref()
     }
 
-    pub fn popup(&self) -> bool {
-        self.snackbar > 0
+    pub fn highlight_copy(&self) -> bool {
+        self.copy > 0
     }
 
     pub fn update(&mut self, event: Event) {
@@ -116,7 +116,7 @@ impl Model {
         let insert = self.filter.is_some();
         match event {
             Event::Render(RenderEvent::Tick) => {
-                self.snackbar = self.snackbar.saturating_sub(1);
+                self.copy = self.copy.saturating_sub(1);
             }
             Event::Render(RenderEvent::Up) => self.select_next(),
             Event::Render(RenderEvent::Char('k')) if !insert => self.select_next(),
@@ -139,7 +139,7 @@ impl Model {
             Event::Render(RenderEvent::Char(c)) if !insert && keys.copy == c => {
                 if let Some(msg) = self.selection.as_deref() {
                     let _ = self.clipboard.set_contents(msg.into());
-                    self.snackbar += 5;
+                    self.copy += 2;
                 }
             }
             Event::Render(RenderEvent::Char(c)) if !insert && keys.search == c => {

@@ -17,3 +17,5 @@ serde_json = { version = "1.0.140", features = ["preserve_order"] }
 enum-as-inner = "0.6.1"
 itertools = "0.14.0"
 clipboard = "0.5.0"
+fuzzy-matcher = "0.3.7"
+derivative = "2.2.0"

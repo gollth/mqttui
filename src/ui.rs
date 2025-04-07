@@ -6,27 +6,47 @@ use ratatui::{
 
 use crate::model::Model;
 
-pub fn render(frame: &mut Frame, model: &mut Model) {
+pub fn render(frame: &mut Frame, model: &Model) {
     let border = Block::bordered().title(Line::raw("MqtTUI").centered());
     let area = border.inner(frame.area());
     frame.render_widget(border, frame.area());
-    let [top, overview] = Layout::vertical([Length(1), Fill(0)]).areas(area);
+    let [top, overview, prompt] = Layout::vertical([
+        Length(1),
+        Fill(0),
+        Length(if model.filter().is_some() { 3 } else { 0 }),
+    ])
+    .areas(area);
 
     // Top header
     frame.render_widget(Paragraph::new(format!("Messages: {}", model.counter)), top);
 
     // Topic overview
-    let list = List::new(model.topics().map(|message| {
-        ListItem::new(message.topic.clone()).style(Style::default().fg(message.freshness()))
+    let list = List::new(model.topics().map(|(topic, message)| {
+        let style = if model.selection().is_some_and(|s| topic.as_str() == s) {
+            Style::new().bg(Color::White).fg(Color::Black)
+        } else {
+            Style::new().fg(message.freshness())
+        };
+        ListItem::new(message.topic.line(style)).style(style)
     }))
-    .highlight_style(Style::new().bg(Color::White).fg(Color::Black))
     .block(
         Block::new()
             .title(Line::raw("Topics").centered())
             .borders(Borders::TOP),
     );
 
-    frame.render_stateful_widget(list, overview, &mut model.state_topics);
+    frame.render_widget(list, overview);
+
+    if let Some(filter) = model.filter() {
+        frame.render_widget(
+            Paragraph::new(format!(">> {}", filter.pattern())).block(
+                Block::new()
+                    .title(Line::raw(filter.kind()).centered())
+                    .borders(Borders::TOP),
+            ),
+            prompt,
+        )
+    }
 
     if model.popup() {
         frame.render_widget(

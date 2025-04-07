@@ -2,6 +2,7 @@ use std::pin::pin;
 use std::time::Duration;
 
 use crossterm::event::{Event as CrossEvent, EventStream, KeyCode, KeyEventKind};
+use enum_as_inner::EnumAsInner;
 use futures::{Stream, StreamExt, stream};
 use paho_mqtt::{AsyncClient, QoS};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -9,9 +10,30 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::task;
 use tokio::time::sleep;
 
-use crate::model::{Event, RenderEvent, UpdateEvent};
+use crate::model::Message;
 
 const TICK: Duration = Duration::from_millis(100);
+
+#[derive(Debug, PartialEq, EnumAsInner)]
+pub enum Event {
+    Render(RenderEvent),
+    Update(UpdateEvent),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RenderEvent {
+    Tick,
+    Up,
+    Down,
+    Back,
+    Char(char),
+    Delete,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum UpdateEvent {
+    Receive(Message),
+}
 
 pub async fn handler(client: &mut AsyncClient) -> UnboundedReceiver<Event> {
     let (tx, rx) = unbounded_channel();
@@ -54,6 +76,7 @@ fn keys() -> impl Stream<Item = Event> {
                 KeyCode::Char(c) => Some(Event::Render(RenderEvent::Char(c))),
                 KeyCode::Up => Some(Event::Render(RenderEvent::Up)),
                 KeyCode::Down => Some(Event::Render(RenderEvent::Down)),
+                KeyCode::Delete | KeyCode::Backspace => Some(Event::Render(RenderEvent::Delete)),
                 KeyCode::Esc => Some(Event::Render(RenderEvent::Back)),
                 _ => None,
             }

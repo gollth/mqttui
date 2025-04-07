@@ -1,13 +1,29 @@
+use clap::Parser;
+use color_eyre::eyre::Context;
 use color_eyre::{Result, eyre::eyre};
 use mqttui::*;
 use mqttui::{events::Event, model::Model};
 use paho_mqtt::{AsyncClient, ConnectOptions, CreateOptionsBuilder};
+use petname::petname;
 use ratatui::{Terminal, prelude::Backend};
 use tokio::sync::mpsc::UnboundedReceiver;
+use url::Url;
+
+/// Mqtt TUI
+///
+/// Search through and inspect contents of MQTT topics
+#[derive(Debug, Parser)]
+struct Args {
+    /// The URL of the MQTT broker to connect to
+    #[arg(short('b'), long, default_value = "mqtt://localhost:1883", value_parser = validate_url)]
+    broker: Url,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut client = init().await?;
+    color_eyre::install()?;
+    let args = Args::parse();
+    let mut client = init(args.broker).await?;
     let rx = events::handler(&mut client).await;
 
     let mut terminal = ratatui::init();
@@ -20,9 +36,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn init() -> Result<AsyncClient> {
-    color_eyre::install()?;
-
+async fn init(broker: Url) -> Result<AsyncClient> {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         ratatui::restore();
@@ -31,11 +45,15 @@ async fn init() -> Result<AsyncClient> {
 
     let client = AsyncClient::new(
         CreateOptionsBuilder::new()
-            .server_uri("localhost:1883")
-            .client_id("foo")
+            .server_uri(broker.clone())
+            .client_id(format!("mqttui-{}", petname(2, "-").unwrap()))
             .finalize(),
     )?;
-    client.connect(ConnectOptions::default()).await?;
+    client
+        .connect(ConnectOptions::default())
+        .await
+        .context(broker)
+        .context("Failed to connect to MQTT broker")?;
     Ok(client)
 }
 
@@ -56,4 +74,8 @@ async fn run<B: Backend>(
         }
     }
     Ok(())
+}
+
+fn validate_url(arg: &str) -> Result<Url, url::ParseError> {
+    Url::parse(arg).or_else(|_| format!("{arg}:1883").parse())
 }

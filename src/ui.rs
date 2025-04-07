@@ -4,16 +4,22 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 
-use crate::model::Model;
+use crate::model::{Filter, Mode, Model};
 
 pub fn render(frame: &mut Frame, model: &Model) {
     let border = Block::bordered().title(Line::raw("MqtTUI").centered());
     let area = border.inner(frame.area());
     frame.render_widget(border, frame.area());
+    match model.mode() {
+        Mode::Topics { filter } => render_topics(frame, area, model, filter.as_ref()),
+    }
+}
+
+fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&Filter>) {
     let [top, overview, prompt] = Layout::vertical([
         Length(1),
         Fill(0),
-        Length(if model.filter().is_some() { 3 } else { 0 }),
+        Length(if filter.is_some() { 3 } else { 0 }),
     ])
     .areas(area);
 
@@ -42,7 +48,7 @@ pub fn render(frame: &mut Frame, model: &Model) {
 
     frame.render_widget(list, overview);
 
-    if let Some(filter) = model.filter() {
+    if let Some(filter) = filter {
         frame.render_widget(
             Paragraph::new(format!(">> {}", filter.pattern())).block(
                 Block::new()

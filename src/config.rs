@@ -5,7 +5,7 @@ use derivative::Derivative;
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub topics: TopicsConfig,
@@ -17,7 +17,7 @@ pub struct Config {
     pub keys: KeyConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize, Derivative)]
+#[derive(Clone, Debug, Serialize, Deserialize, Derivative)]
 #[derivative(Default)]
 pub struct TopicsConfig {
     /// Until which time since last receptions topics are considered "fresh"
@@ -31,7 +31,7 @@ pub struct TopicsConfig {
     pub stale_after: Duration,
 }
 
-#[derive(Debug, Serialize, Deserialize, Derivative)]
+#[derive(Clone, Debug, Serialize, Deserialize, Derivative)]
 #[derivative(Default)]
 pub struct ColorConfig {
     /// How to color the selection
@@ -55,7 +55,7 @@ pub struct ColorConfig {
     pub stale: Color,
 }
 
-#[derive(Debug, Serialize, Deserialize, Derivative)]
+#[derive(Clone, Debug, Serialize, Deserialize, Derivative)]
 #[derivative(Default)]
 pub struct KeyConfig {
     /// Key to use for searching in topics

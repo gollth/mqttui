@@ -28,10 +28,9 @@ pub struct Model {
     pub shutdown: bool,
     pub counter: i32,
 
+    mode: Mode,
     messages: BTreeMap<String, Message>,
     selection: Option<String>,
-
-    filter: Option<Filter>,
 
     clipboard: ClipboardContext,
     copy: usize,
@@ -49,6 +48,11 @@ pub struct Message {
     pub(crate) data: Value,
     pub(crate) retain: bool,
     last: Instant,
+}
+
+#[derive(Debug, PartialEq, EnumAsInner)]
+pub enum Mode {
+    Topics { filter: Option<Filter> },
 }
 
 #[derive(Derivative, EnumAsInner)]
@@ -73,8 +77,10 @@ impl Model {
             counter: 0,
             copy: 0,
             messages: Default::default(),
-            selection: Default::default(),
-            filter: Default::default(),
+            selection: None,
+            mode: Mode::Topics {
+                filter: Default::default(),
+            },
         })
     }
 
@@ -92,7 +98,7 @@ impl Model {
             .enumerate()
             .filter_map(|(i, (topic, message))| {
                 let i = -(i as i64);
-                let Some(filter) = self.filter.as_ref() else {
+                let Some(filter) = self.mode().as_topics().and_then(|f| f.as_ref()) else {
                     return Some((i, topic, message));
                 };
 
@@ -103,8 +109,8 @@ impl Model {
             .map(|(_, topic, message)| (topic, message))
     }
 
-    pub fn filter(&self) -> Option<&Filter> {
-        self.filter.as_ref()
+    pub fn mode(&self) -> &Mode {
+        &self.mode
     }
 
     pub fn highlight_copy(&self) -> bool {
@@ -112,64 +118,74 @@ impl Model {
     }
 
     pub fn update(&mut self, event: Event) {
-        let keys = &self.config().keys;
-        let insert = self.filter.is_some();
-        match event {
-            Event::Render(RenderEvent::Tick) => {
-                self.copy = self.copy.saturating_sub(1);
-            }
-            Event::Render(RenderEvent::Up) => self.select_next(),
-            Event::Render(RenderEvent::Char('k')) if !insert => self.select_next(),
+        let keys = self.config().keys.clone();
+        match &mut self.mode {
+            Mode::Topics { filter } => {
+                let insert = filter.is_some();
+                match event {
+                    Event::Render(RenderEvent::Tick) => {
+                        self.copy = self.copy.saturating_sub(1);
+                    }
+                    Event::Render(RenderEvent::Up) => self.select_next(),
+                    Event::Render(RenderEvent::Char('k')) if !insert => self.select_next(),
 
-            Event::Render(RenderEvent::Down) => self.select_previous(),
-            Event::Render(RenderEvent::Char('j')) if !insert => self.select_previous(),
+                    Event::Render(RenderEvent::Down) => self.select_previous(),
+                    Event::Render(RenderEvent::Char('j')) if !insert => self.select_previous(),
+                    Event::Render(RenderEvent::Back) if filter.is_some() => self.clear_filter(),
+                    Event::Render(RenderEvent::Back) => {}
 
-            Event::Render(RenderEvent::Back) if self.filter.is_some() => self.clear_filter(),
-            Event::Render(RenderEvent::Back) => {}
+                    Event::Render(RenderEvent::Delete) if insert => {
+                        if let Some(filter) = filter.as_mut() {
+                            filter.delete();
+                        }
+                        self.update_filter();
+                    }
+                    Event::Render(RenderEvent::Delete) => {}
 
-            Event::Render(RenderEvent::Delete) if insert => {
-                if let Some(filter) = self.filter.as_mut() {
-                    filter.delete();
+                    Event::Render(RenderEvent::Char('q')) if !insert => self.shutdown = true,
+                    Event::Render(RenderEvent::Char(c)) if !insert && keys.copy == c => {
+                        if let Some(msg) = self.selection() {
+                            let _ = self.clipboard.set_contents(msg.into());
+                            self.copy += 2;
+                        }
+                    }
+                    Event::Render(RenderEvent::Char(c)) if !insert && keys.search == c => {
+                        *filter = Some(Filter::keep())
+                    }
+                    Event::Render(RenderEvent::Char(c)) if !insert && keys.ignore == c => {
+                        *filter = Some(Filter::skip())
+                    }
+
+                    Event::Render(RenderEvent::Char(c)) if insert => {
+                        if let Some(filter) = filter.as_mut() {
+                            filter.push(c)
+                        }
+                        self.update_filter()
+                    }
+                    Event::Render(RenderEvent::Char(_)) => {}
+                    Event::Update(UpdateEvent::Receive(message)) => {
+                        self.on_message(message);
+                    }
                 }
-                self.update_filter();
-            }
-            Event::Render(RenderEvent::Delete) => {}
-
-            Event::Render(RenderEvent::Char('q')) if !insert => self.shutdown = true,
-            Event::Render(RenderEvent::Char(c)) if !insert && keys.copy == c => {
-                if let Some(msg) = self.selection.as_deref() {
-                    let _ = self.clipboard.set_contents(msg.into());
-                    self.copy += 2;
-                }
-            }
-            Event::Render(RenderEvent::Char(c)) if !insert && keys.search == c => {
-                self.filter = Some(Filter::keep())
-            }
-            Event::Render(RenderEvent::Char(c)) if !insert && keys.ignore == c => {
-                self.filter = Some(Filter::skip())
-            }
-
-            Event::Render(RenderEvent::Char(c)) if insert => {
-                if let Some(filter) = self.filter.as_mut() {
-                    filter.push(c)
-                }
-                self.update_filter()
-            }
-
-            Event::Render(RenderEvent::Char(_)) => {}
-            Event::Update(UpdateEvent::Receive(message)) => {
-                self.on_message(message);
             }
         }
     }
 
     fn update_filter(&mut self) {
-        let filter = self
-            .filter
-            .as_ref()
-            .expect("to only call `Model::update_filter()` with an active filter set");
-        for m in self.messages.values_mut() {
-            m.topic.highlights = filter.highlights(&m.topic);
+        let Mode::Topics {
+            filter: Some(filter),
+        } = self.mode()
+        else {
+            return;
+        };
+
+        let highlights = self
+            .messages
+            .keys()
+            .map(|topic| filter.highlights(topic))
+            .collect::<Vec<_>>();
+        for (m, highlights) in self.messages.values_mut().zip(highlights) {
+            m.topic.highlights = highlights;
         }
 
         if !self
@@ -183,30 +199,33 @@ impl Model {
     }
 
     fn clear_filter(&mut self) {
-        self.filter = None;
+        let Mode::Topics { filter, .. } = &mut self.mode else {
+            return;
+        };
+        filter.take();
         for m in self.messages.values_mut() {
             m.topic.highlights.clear();
         }
     }
 
     fn select_next(&mut self) {
-        let previous = self
+        let next = self
             .topics()
             .position(|(t, _)| self.selection.as_deref().is_some_and(|s| s == t.as_str()))
             .map(|n| (n.saturating_sub(1)).max(0))
             .unwrap_or(0);
-        let next = self.topics().nth(previous).map(|(topic, _)| topic.clone());
+        let next = self.topics().nth(next).map(|(topic, _)| topic.clone());
         self.selection = next;
     }
 
     fn select_previous(&mut self) {
-        let next = self
+        let previous = self
             .topics()
             .position(|(t, _)| self.selection.as_deref().is_some_and(|s| s == t.as_str()))
             .map(|n| (n + 1).min(self.topics().count().saturating_sub(1)))
             .unwrap_or(0);
-        let next = self.topics().nth(next).map(|(topic, _)| topic.clone());
-        self.selection = next;
+        let previous = self.topics().nth(previous).map(|(topic, _)| topic.clone());
+        self.selection = previous;
     }
 
     fn on_message(&mut self, message: Message) {
@@ -217,7 +236,8 @@ impl Model {
             .or_insert(message);
 
         if self.messages.is_empty() {
-            self.selection = None;
+            todo!()
+            // self.selection = None;
         }
     }
 }

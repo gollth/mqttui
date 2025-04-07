@@ -2,7 +2,7 @@ use std::{
     cmp::Reverse,
     collections::{BTreeMap, HashSet},
     ops::Deref,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use clipboard::{ClipboardContext, ClipboardProvider};
@@ -17,15 +17,14 @@ use ratatui::{
 };
 use serde_json::Value;
 
-use crate::events::{Event, RenderEvent, UpdateEvent};
-
-/// Timeout until when messages are considered fresh (i.e. white highlight)
-const FRESH: Duration = Duration::from_millis(500);
-
-/// Timeout after which messages considered to be stale (i.e. dark grey highlight)
-const STALE: Duration = Duration::from_secs(5);
+use crate::{
+    config::Config,
+    events::{Event, RenderEvent, UpdateEvent},
+};
 
 pub struct Model {
+    config: Config,
+
     pub shutdown: bool,
     pub counter: i32,
 
@@ -67,9 +66,9 @@ pub enum Filter {
 
 impl Model {
     pub fn new() -> Result<Self> {
-        let clipboard = ClipboardProvider::new().map_err(|e| eyre!("{e}"))?;
         Ok(Self {
-            clipboard,
+            config: Config::load()?,
+            clipboard: ClipboardProvider::new().map_err(|e| eyre!("{e}"))?,
             shutdown: false,
             counter: 0,
             snackbar: 0,
@@ -77,6 +76,10 @@ impl Model {
             selection: Default::default(),
             filter: Default::default(),
         })
+    }
+
+    pub(crate) fn config(&self) -> &Config {
+        &self.config
     }
 
     pub fn selection(&self) -> Option<&str> {
@@ -109,6 +112,7 @@ impl Model {
     }
 
     pub fn update(&mut self, event: Event) {
+        let keys = &self.config().keys;
         let insert = self.filter.is_some();
         match event {
             Event::Render(RenderEvent::Tick) => {
@@ -132,14 +136,18 @@ impl Model {
             Event::Render(RenderEvent::Delete) => {}
 
             Event::Render(RenderEvent::Char('q')) if !insert => self.shutdown = true,
-            Event::Render(RenderEvent::Char('y')) if !insert => {
+            Event::Render(RenderEvent::Char(c)) if !insert && keys.copy == c => {
                 if let Some(msg) = self.selection.as_deref() {
                     let _ = self.clipboard.set_contents(msg.into());
                     self.snackbar += 5;
                 }
             }
-            Event::Render(RenderEvent::Char('/')) if !insert => self.filter = Some(Filter::keep()),
-            Event::Render(RenderEvent::Char('?')) if !insert => self.filter = Some(Filter::skip()),
+            Event::Render(RenderEvent::Char(c)) if !insert && keys.search == c => {
+                self.filter = Some(Filter::keep())
+            }
+            Event::Render(RenderEvent::Char(c)) if !insert && keys.ignore == c => {
+                self.filter = Some(Filter::skip())
+            }
 
             Event::Render(RenderEvent::Char(c)) if insert => {
                 if let Some(filter) = self.filter.as_mut() {
@@ -250,18 +258,18 @@ impl Message {
         self.last = Instant::now();
     }
 
-    pub(crate) fn freshness(&self) -> Color {
+    pub(crate) fn freshness(&self, config: &Config) -> Color {
         if self.retain {
-            return Color::Yellow;
+            return config.colors.retain;
         }
         let ttl = Instant::now() - self.last;
-        if ttl < FRESH {
-            return Color::White;
+        if ttl < config.topics.fresh_until {
+            return config.colors.fresh;
         }
-        if ttl < STALE {
-            return Color::Gray;
+        if ttl < config.topics.stale_after {
+            return config.colors.intime;
         }
-        Color::DarkGray
+        config.colors.stale
     }
 }
 

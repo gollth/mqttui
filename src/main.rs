@@ -1,8 +1,14 @@
 use clap::Parser;
-use color_eyre::eyre::Context;
-use color_eyre::{Result, eyre::eyre};
-use mqttui::*;
-use mqttui::{events::Event, model::Model};
+use color_eyre::{
+    Result,
+    eyre::{Context, eyre},
+};
+use mqttui::{
+    config::Config,
+    events::{self, Event},
+    model::Model,
+    ui,
+};
 use paho_mqtt::{AsyncClient, ConnectOptions, CreateOptionsBuilder};
 use petname::petname;
 use ratatui::{Terminal, prelude::Backend};
@@ -17,12 +23,20 @@ struct Args {
     /// The URL of the MQTT broker to connect to
     #[arg(short('b'), long, default_value = "mqtt://localhost:1883", value_parser = validate_url)]
     broker: Url,
+
+    /// Print the path of the default config
+    #[arg(long)]
+    print_config: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
     let args = Args::parse();
+    if args.print_config {
+        println!("{}", Config::path()?.display());
+        return Ok(());
+    }
     let mut client = init(args.broker).await?;
     let rx = events::handler(&mut client).await;
 
@@ -43,10 +57,12 @@ async fn init(broker: Url) -> Result<AsyncClient> {
         hook(panic_info);
     }));
 
+    let name = env!("CARGO_PKG_NAME");
+
     let client = AsyncClient::new(
         CreateOptionsBuilder::new()
             .server_uri(broker.clone())
-            .client_id(format!("mqttui-{}", petname(2, "-").unwrap()))
+            .client_id(format!("{name}-{}", petname(2, "-").unwrap()))
             .finalize(),
     )?;
     client

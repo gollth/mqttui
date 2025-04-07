@@ -22,10 +22,11 @@ pub fn render(frame: &mut Frame, model: &Model) {
 
     // Topic overview
     let list = List::new(model.topics().map(|(topic, message)| {
+        let config = model.config();
         let style = if model.selection().is_some_and(|s| topic.as_str() == s) {
-            Style::new().bg(Color::White).fg(Color::Black)
+            Style::new().bg(config.colors.selection).fg(Color::Black)
         } else {
-            Style::new().fg(message.freshness())
+            Style::new().fg(message.freshness(config))
         };
         ListItem::new(message.topic.line(style)).style(style)
     }))

@@ -4,7 +4,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
-use crate::model::{Filter, Model};
+use crate::model::Model;
 
 pub fn render(frame: &mut Frame, model: &Model) {
     let border = Block::bordered().title(Line::raw("MqtTUI").centered());
@@ -37,16 +37,15 @@ pub fn render(frame: &mut Frame, model: &Model) {
 
     frame.render_widget(list, overview);
 
-    match model.filter() {
-        Some(Filter::Keep { pattern }) => frame.render_widget(
-            Paragraph::new(format!(">> {pattern}")).block(
+    if let Some(filter) = model.filter() {
+        frame.render_widget(
+            Paragraph::new(format!(">> {}", filter.pattern())).block(
                 Block::new()
-                    .title(Line::raw("Filter").centered())
+                    .title(Line::raw(filter.kind()).centered())
                     .borders(Borders::TOP),
             ),
             prompt,
-        ),
-        None => {}
+        )
     }
 
     if model.popup() {

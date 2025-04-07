@@ -51,6 +51,7 @@ pub struct Message {
 #[derive(Clone, Debug, PartialEq, EnumAsInner)]
 pub enum Filter {
     Keep { pattern: String },
+    Skip { pattern: String },
 }
 
 impl Model {
@@ -72,9 +73,11 @@ impl Model {
     }
 
     pub fn topics(&self) -> impl Iterator<Item = (&String, &Message)> {
-        self.messages
-            .iter()
-            .filter(|(t, _)| self.filter.as_ref().is_none_or(|f| t.contains(f.pattern())))
+        self.messages.iter().filter(|(t, _)| {
+            self.filter
+                .as_ref()
+                .is_none_or(|filter| filter.satisfies(t))
+        })
     }
 
     pub fn filter(&self) -> Option<&Filter> {
@@ -101,7 +104,9 @@ impl Model {
             Event::Render(RenderEvent::Back) => {}
 
             Event::Render(RenderEvent::Delete) if insert => {
-                self.delete();
+                if let Some(filter) = self.filter.as_mut() {
+                    filter.delete();
+                }
                 self.update_filter();
             }
             Event::Render(RenderEvent::Delete) => {}
@@ -114,10 +119,11 @@ impl Model {
                 }
             }
             Event::Render(RenderEvent::Char('/')) if !insert => self.filter = Some(Filter::keep()),
+            Event::Render(RenderEvent::Char('?')) if !insert => self.filter = Some(Filter::skip()),
 
             Event::Render(RenderEvent::Char(c)) if insert => {
-                if let Some(prompt) = self.filter.as_mut().and_then(|f| f.as_keep_mut()) {
-                    prompt.push(c)
+                if let Some(filter) = self.filter.as_mut() {
+                    filter.push(c)
                 }
                 self.update_filter()
             }
@@ -130,18 +136,12 @@ impl Model {
     }
 
     fn update_filter(&mut self) {
-        match &mut self.filter {
-            Some(Filter::Keep { pattern }) => {
-                for m in self.messages.values_mut() {
-                    m.topic.highlights = m
-                        .topic
-                        .find(pattern.as_str())
-                        .into_iter()
-                        .flat_map(|start| start..(start + pattern.chars().count()))
-                        .collect();
-                }
-            }
-            None => unreachable!(),
+        let filter = self
+            .filter
+            .as_ref()
+            .expect("to only call `Model::update_filter()` with an active filter set");
+        for m in self.messages.values_mut() {
+            m.topic.highlights = filter.highlights(&m.topic);
         }
     }
 
@@ -149,15 +149,6 @@ impl Model {
         self.filter = None;
         for m in self.messages.values_mut() {
             m.topic.highlights.clear();
-        }
-    }
-
-    fn delete(&mut self) {
-        match &mut self.filter {
-            None => {}
-            Some(Filter::Keep { pattern }) => {
-                pattern.pop();
-            }
         }
     }
 
@@ -260,15 +251,61 @@ impl From<paho_mqtt::Message> for Message {
 }
 
 impl Filter {
-    pub(crate) fn keep() -> Self {
+    fn keep() -> Self {
         Self::Keep {
             pattern: Default::default(),
+        }
+    }
+
+    fn skip() -> Self {
+        Self::Skip {
+            pattern: Default::default(),
+        }
+    }
+
+    pub(crate) fn kind(&self) -> &str {
+        match self {
+            Self::Keep { .. } => "Filter",
+            Self::Skip { .. } => "Ignore",
         }
     }
 
     pub(crate) fn pattern(&self) -> &str {
         match self {
             Self::Keep { pattern } => pattern.as_str(),
+            Self::Skip { pattern } => pattern.as_str(),
+        }
+    }
+
+    fn push(&mut self, c: char) {
+        match self {
+            Self::Keep { pattern } => pattern.push(c),
+            Self::Skip { pattern } => pattern.push(c),
+        };
+    }
+
+    fn delete(&mut self) {
+        match self {
+            Self::Keep { pattern } => pattern.pop(),
+            Self::Skip { pattern } => pattern.pop(),
+        };
+    }
+
+    pub(crate) fn highlights(&self, haystack: &str) -> HashSet<usize> {
+        match self {
+            Self::Keep { pattern } => haystack
+                .find(pattern.as_str())
+                .into_iter()
+                .flat_map(|start| start..(start + pattern.chars().count()))
+                .collect(),
+            Self::Skip { .. } => Default::default(),
+        }
+    }
+
+    fn satisfies(&self, haystack: &str) -> bool {
+        match self {
+            Self::Keep { pattern } => haystack.contains(pattern),
+            Self::Skip { pattern } => pattern.is_empty() || !haystack.contains(pattern),
         }
     }
 }

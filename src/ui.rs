@@ -4,26 +4,30 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
-use crate::model::Model;
+use crate::model::{Filter, Model};
 
-pub fn render(frame: &mut Frame, model: &mut Model) {
+pub fn render(frame: &mut Frame, model: &Model) {
     let border = Block::bordered().title(Line::raw("MqtTUI").centered());
     let area = border.inner(frame.area());
     frame.render_widget(border, frame.area());
-    let [top, overview] = Layout::vertical([Length(1), Fill(0)]).areas(area);
+    let [top, overview, prompt] = Layout::vertical([
+        Length(1),
+        Fill(0),
+        Length(if model.filter().is_some() { 3 } else { 0 }),
+    ])
+    .areas(area);
 
     // Top header
     frame.render_widget(Paragraph::new(format!("Messages: {}", model.counter)), top);
 
     // Topic overview
-    let list = List::new(model.topics().map(|message| {
-        let style = if model.selection().is_some_and(|s| &message.topic == s) {
+    let list = List::new(model.topics().map(|(topic, message)| {
+        let style = if model.selection().is_some_and(|s| topic.as_str() == s) {
             Style::new().bg(Color::White).fg(Color::Black)
         } else {
             Style::new().fg(message.freshness())
         };
-
-        ListItem::new(message.topic.clone()).style(style)
+        ListItem::new(message.topic.line(style)).style(style)
     }))
     .block(
         Block::new()
@@ -32,6 +36,18 @@ pub fn render(frame: &mut Frame, model: &mut Model) {
     );
 
     frame.render_widget(list, overview);
+
+    match model.filter() {
+        Some(Filter::Keep { pattern }) => frame.render_widget(
+            Paragraph::new(format!(">> {pattern}")).block(
+                Block::new()
+                    .title(Line::raw("Filter").centered())
+                    .borders(Borders::TOP),
+            ),
+            prompt,
+        ),
+        None => {}
+    }
 
     if model.popup() {
         frame.render_widget(

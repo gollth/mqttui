@@ -54,6 +54,7 @@ fn keys() -> impl Stream<Item = Event> {
                 KeyCode::Char(c) => Some(Event::Render(RenderEvent::Char(c))),
                 KeyCode::Up => Some(Event::Render(RenderEvent::Up)),
                 KeyCode::Down => Some(Event::Render(RenderEvent::Down)),
+                KeyCode::Delete | KeyCode::Backspace => Some(Event::Render(RenderEvent::Delete)),
                 KeyCode::Esc => Some(Event::Render(RenderEvent::Back)),
                 _ => None,
             }

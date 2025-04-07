@@ -52,7 +52,7 @@ async fn run<B: Backend>(
         // eprintln!("{model:#?}");
 
         if rendering {
-            terminal.draw(|frame| ui::render(frame, &mut model))?;
+            terminal.draw(|frame| ui::render(frame, &model))?;
         }
     }
     Ok(())

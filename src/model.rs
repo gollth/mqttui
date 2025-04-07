@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     collections::{BTreeMap, HashSet},
     ops::Deref,
     time::{Duration, Instant},
@@ -6,7 +7,10 @@ use std::{
 
 use clipboard::{ClipboardContext, ClipboardProvider};
 use color_eyre::{Result, eyre::eyre};
+use derivative::Derivative;
 use enum_as_inner::EnumAsInner;
+use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
+use itertools::Itertools;
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -48,10 +52,17 @@ pub struct Message {
     last: Instant,
 }
 
-#[derive(Clone, Debug, PartialEq, EnumAsInner)]
+#[derive(Derivative, EnumAsInner)]
+#[derivative(Debug, PartialEq)]
 pub enum Filter {
-    Keep { pattern: String },
-    Skip { pattern: String },
+    Keep {
+        pattern: String,
+        #[derivative(Debug = "ignore", PartialEq = "ignore")]
+        fuzzer: Box<SkimMatcherV2>,
+    },
+    Skip {
+        pattern: String,
+    },
 }
 
 impl Model {
@@ -73,11 +84,20 @@ impl Model {
     }
 
     pub fn topics(&self) -> impl Iterator<Item = (&String, &Message)> {
-        self.messages.iter().filter(|(t, _)| {
-            self.filter
-                .as_ref()
-                .is_none_or(|filter| filter.satisfies(t))
-        })
+        self.messages
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (topic, message))| {
+                let i = -(i as i64);
+                let Some(filter) = self.filter.as_ref() else {
+                    return Some((i, topic, message));
+                };
+
+                let score = filter.score(i, topic)?;
+                Some((score, topic, message))
+            })
+            .sorted_by_key(|(score, _, _)| Reverse(*score))
+            .map(|(_, topic, message)| (topic, message))
     }
 
     pub fn filter(&self) -> Option<&Filter> {
@@ -254,6 +274,7 @@ impl Filter {
     fn keep() -> Self {
         Self::Keep {
             pattern: Default::default(),
+            fuzzer: Default::default(),
         }
     }
 
@@ -272,40 +293,43 @@ impl Filter {
 
     pub(crate) fn pattern(&self) -> &str {
         match self {
-            Self::Keep { pattern } => pattern.as_str(),
+            Self::Keep { pattern, .. } => pattern.as_str(),
             Self::Skip { pattern } => pattern.as_str(),
         }
     }
 
     fn push(&mut self, c: char) {
         match self {
-            Self::Keep { pattern } => pattern.push(c),
+            Self::Keep { pattern, .. } => pattern.push(c),
             Self::Skip { pattern } => pattern.push(c),
         };
     }
 
     fn delete(&mut self) {
         match self {
-            Self::Keep { pattern } => pattern.pop(),
+            Self::Keep { pattern, .. } => pattern.pop(),
             Self::Skip { pattern } => pattern.pop(),
         };
     }
 
-    pub(crate) fn highlights(&self, haystack: &str) -> HashSet<usize> {
+    fn highlights(&self, haystack: &str) -> HashSet<usize> {
         match self {
-            Self::Keep { pattern } => haystack
-                .find(pattern.as_str())
+            // Use cached values
+            Self::Keep { pattern, fuzzer } => fuzzer
+                .fuzzy_indices(haystack, pattern)
                 .into_iter()
-                .flat_map(|start| start..(start + pattern.chars().count()))
+                .flat_map(|(_, xs)| xs)
                 .collect(),
             Self::Skip { .. } => Default::default(),
         }
     }
 
-    fn satisfies(&self, haystack: &str) -> bool {
+    fn score(&self, i: i64, haystack: &str) -> Option<i64> {
         match self {
-            Self::Keep { pattern } => haystack.contains(pattern),
-            Self::Skip { pattern } => pattern.is_empty() || !haystack.contains(pattern),
+            Self::Keep { pattern, .. } | Self::Skip { pattern } if pattern.is_empty() => Some(i),
+            Self::Keep { pattern, fuzzer } => fuzzer.fuzzy_match(haystack, pattern),
+            Self::Skip { pattern } if !haystack.contains(pattern) => Some(i),
+            Self::Skip { .. } => None,
         }
     }
 }

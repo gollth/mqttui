@@ -13,6 +13,8 @@ use ratatui::{
 };
 use serde_json::Value;
 
+use crate::events::{Event, RenderEvent, UpdateEvent};
+
 /// Timeout until when messages are considered fresh (i.e. white highlight)
 const FRESH: Duration = Duration::from_millis(500);
 
@@ -30,28 +32,6 @@ pub struct Model {
 
     clipboard: ClipboardContext,
     snackbar: usize,
-}
-
-// TODO: Move them to `events.rs`
-#[derive(Debug, PartialEq, EnumAsInner)]
-pub enum Event {
-    Render(RenderEvent),
-    Update(UpdateEvent),
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum RenderEvent {
-    Tick,
-    Up,
-    Down,
-    Back,
-    Char(char),
-    Delete,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum UpdateEvent {
-    Receive(Message),
 }
 
 #[derive(Clone, Debug, PartialEq)]

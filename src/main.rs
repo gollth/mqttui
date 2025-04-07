@@ -1,6 +1,6 @@
 use color_eyre::{Result, eyre::eyre};
-use model::{Event, Model};
 use mqttui::*;
+use mqttui::{events::Event, model::Model};
 use paho_mqtt::{AsyncClient, ConnectOptions, CreateOptionsBuilder};
 use ratatui::{Terminal, prelude::Backend};
 use tokio::sync::mpsc::UnboundedReceiver;

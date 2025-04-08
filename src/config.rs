@@ -21,13 +21,13 @@ pub struct Config {
 #[derivative(Default)]
 pub struct TopicsConfig {
     /// Until which time since last receptions topics are considered "fresh"
-    #[serde(with = "humantime_serde")]
-    #[derivative(Default(value = "Duration::from_millis(500)"))]
+    #[serde(default = "defaults::topics::fresh_until", with = "humantime_serde")]
+    #[derivative(Default(value = "defaults::topics::fresh_until()"))]
     pub fresh_until: Duration,
 
     /// From which time on since last receptions topics are considered "stale"
-    #[serde(with = "humantime_serde")]
-    #[derivative(Default(value = "Duration::from_secs(5)"))]
+    #[serde(default = "defaults::topics::stale_after", with = "humantime_serde")]
+    #[derivative(Default(value = "defaults::topics::stale_after()"))]
     pub stale_after: Duration,
 }
 
@@ -35,27 +35,33 @@ pub struct TopicsConfig {
 #[derivative(Default)]
 pub struct ColorConfig {
     /// Color theme of JSON syntax highlighter
-    #[derivative(Default(value = "\"Solarized (dark)\".into()"))]
+    #[serde(default = "defaults::colors::theme")]
+    #[derivative(Default(value = "defaults::colors::theme()"))]
     pub theme: String,
 
     /// How to color the selection
-    #[derivative(Default(value = "Color::White"))]
+    #[serde(default = "defaults::colors::selection")]
+    #[derivative(Default(value = "defaults::colors::selection()"))]
     pub selection: Color,
 
     /// How to color retain topics
-    #[derivative(Default(value = "Color::Cyan"))]
+    #[serde(default = "defaults::colors::retain")]
+    #[derivative(Default(value = "defaults::colors::retain()"))]
     pub retain: Color,
 
     /// How to color fresh topics
-    #[derivative(Default(value = "Color::White"))]
+    #[serde(default = "defaults::colors::fresh")]
+    #[derivative(Default(value = "defaults::colors::fresh()"))]
     pub fresh: Color,
 
     /// How to color non-fresh but also non-stale topics
-    #[derivative(Default(value = "Color::Gray"))]
+    #[serde(default = "defaults::colors::intime")]
+    #[derivative(Default(value = "defaults::colors::intime()"))]
     pub intime: Color,
 
     /// How to color stale topics
-    #[derivative(Default(value = "Color::DarkGray"))]
+    #[serde(default = "defaults::colors::stale")]
+    #[derivative(Default(value = "defaults::colors::stale()"))]
     pub stale: Color,
 }
 
@@ -63,15 +69,18 @@ pub struct ColorConfig {
 #[derivative(Default)]
 pub struct KeyConfig {
     /// Key to use for searching in topics
-    #[derivative(Default(value = "'/'"))]
+    #[serde(default = "defaults::keys::search")]
+    #[derivative(Default(value = "defaults::keys::search()"))]
     pub search: char,
 
     /// Key to use for negative searching in topics
-    #[derivative(Default(value = "'?'"))]
+    #[serde(default = "defaults::keys::ignore")]
+    #[derivative(Default(value = "defaults::keys::ignore()"))]
     pub ignore: char,
 
     /// Key to used to copy to clipboard
-    #[derivative(Default(value = "'y'"))]
+    #[serde(default = "defaults::keys::copy")]
+    #[derivative(Default(value = "defaults::keys::copy()"))]
     pub copy: char,
 }
 
@@ -99,5 +108,63 @@ impl Config {
         toml::from_str(&content)
             .context(path.display().to_string())
             .context("failed to parse config")
+    }
+}
+
+pub(crate) mod defaults {
+    use super::*;
+
+    pub(crate) mod topics {
+        use super::*;
+
+        pub(crate) fn fresh_until() -> Duration {
+            Duration::from_millis(500)
+        }
+
+        pub(crate) fn stale_after() -> Duration {
+            Duration::from_secs(5)
+        }
+    }
+
+    pub(crate) mod colors {
+        use super::*;
+
+        pub(crate) fn theme() -> String {
+            "Solarized (dark)".into()
+        }
+
+        pub(crate) fn selection() -> Color {
+            Color::White
+        }
+
+        pub(crate) fn retain() -> Color {
+            Color::Cyan
+        }
+
+        pub(crate) fn fresh() -> Color {
+            Color::White
+        }
+
+        pub(crate) fn intime() -> Color {
+            Color::Gray
+        }
+
+        pub(crate) fn stale() -> Color {
+            Color::DarkGray
+        }
+    }
+
+    pub(crate) mod keys {
+        pub(crate) fn search() -> char {
+            '/'
+        }
+
+        pub(crate) fn ignore() -> char {
+            '?'
+        }
+
+        pub(crate) fn copy() -> char {
+            'y'
+        }
     }
 }

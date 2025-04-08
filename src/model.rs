@@ -54,7 +54,7 @@ pub struct Message {
 #[derive(Debug, Clone, PartialEq, EnumAsInner)]
 pub enum Mode {
     Topics { filter: Option<Filter> },
-    Detail { topic: String },
+    Detail { topic: String, scroll: u16 },
 }
 
 #[derive(Clone, Derivative, EnumAsInner)]
@@ -130,16 +130,36 @@ impl Model {
             Mode::Topics { mut filter } => {
                 let insert = filter.is_some();
                 match event {
+                    Event::Update(UpdateEvent::Receive(message)) => {
+                        self.on_message(message);
+                        Mode::Topics { filter }
+                    }
                     Event::Render(RenderEvent::Tick) => {
                         self.copy = self.copy.saturating_sub(1);
                         Mode::Topics { filter }
                     }
+
+                    // Quit applicaton
+                    Event::Render(RenderEvent::Char('q')) if !insert => {
+                        self.shutdown = true;
+                        Mode::Topics { filter }
+                    }
+
+                    // Enter into & out of message pane
                     Event::Render(RenderEvent::Select) => match self.selection() {
                         None => Mode::Topics { filter },
                         Some(topic) => Mode::Detail {
                             topic: topic.into(),
+                            scroll: 0,
                         },
                     },
+                    Event::Render(RenderEvent::Back) if filter.is_some() => {
+                        self.clear_filter();
+                        Mode::Topics { filter }
+                    }
+                    Event::Render(RenderEvent::Back) => Mode::Topics { filter },
+
+                    // Navigation
                     Event::Render(RenderEvent::Up) => {
                         self.select_next();
                         Mode::Topics { filter }
@@ -157,11 +177,14 @@ impl Model {
                         self.select_previous();
                         Mode::Topics { filter }
                     }
-                    Event::Render(RenderEvent::Back) if filter.is_some() => {
-                        self.clear_filter();
+                    Event::Render(RenderEvent::Home) if !insert => {
+                        self.select_first();
                         Mode::Topics { filter }
                     }
-                    Event::Render(RenderEvent::Back) => Mode::Topics { filter },
+                    Event::Render(RenderEvent::End) if !insert => {
+                        self.select_last();
+                        Mode::Topics { filter }
+                    }
 
                     Event::Render(RenderEvent::Delete) if insert => {
                         if let Some(filter) = filter.as_mut() {
@@ -172,10 +195,7 @@ impl Model {
                     }
                     Event::Render(RenderEvent::Delete) => Mode::Topics { filter },
 
-                    Event::Render(RenderEvent::Char('q')) if !insert => {
-                        self.shutdown = true;
-                        Mode::Topics { filter }
-                    }
+                    // Copy topic
                     Event::Render(RenderEvent::Char(c)) if !insert && keys.copy == c => {
                         if let Some(msg) = self.selection() {
                             let _ = self.clipboard.set_contents(msg.into());
@@ -183,6 +203,8 @@ impl Model {
                         }
                         Mode::Topics { filter }
                     }
+
+                    // Searching
                     Event::Render(RenderEvent::Char(c)) if !insert && keys.search == c => {
                         Mode::Topics {
                             filter: Some(Filter::keep()),
@@ -194,6 +216,7 @@ impl Model {
                         }
                     }
 
+                    // Text input
                     Event::Render(RenderEvent::Char(c)) if insert => {
                         if let Some(filter) = filter.as_mut() {
                             filter.push(c)
@@ -202,34 +225,69 @@ impl Model {
                         Mode::Topics { filter }
                     }
                     Event::Render(RenderEvent::Char(_)) => Mode::Topics { filter },
-                    Event::Update(UpdateEvent::Receive(message)) => {
-                        self.on_message(message);
-                        Mode::Topics { filter }
-                    }
+                    Event::Render(RenderEvent::Home | RenderEvent::End) => Mode::Topics { filter },
                 }
             }
-            Mode::Detail { topic } => match event {
+            Mode::Detail { topic, scroll } => match event {
+                // Update
+                Event::Update(UpdateEvent::Receive(message)) => {
+                    self.on_message(message);
+                    Mode::Detail { topic, scroll }
+                }
                 Event::Render(RenderEvent::Tick) => {
                     self.copy = self.copy.saturating_sub(1);
-                    Mode::Detail { topic }
+                    Mode::Detail { topic, scroll }
                 }
+
+                // Quit
                 Event::Render(RenderEvent::Char('q')) => {
                     self.shutdown = true;
+                    Mode::Detail { topic, scroll }
+                }
+
+                // Back to topics overview
+                Event::Render(RenderEvent::Back) => {
+                    self.clear_filter();
                     Mode::Topics { filter: None }
                 }
-                Event::Render(RenderEvent::Back) => Mode::Topics { filter: None },
 
+                // Copy
                 Event::Render(RenderEvent::Char(c)) if keys.copy == c => {
                     if let Some(msg) = self.message(&topic) {
                         let _ = self.clipboard.set_contents(msg);
                         self.copy += 2;
                     }
-                    Mode::Detail { topic }
+                    Mode::Detail { topic, scroll }
                 }
-                Event::Update(UpdateEvent::Receive(message)) => {
-                    self.on_message(message);
-                    Mode::Detail { topic }
-                }
+
+                // Navigation
+                Event::Render(RenderEvent::Up) => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_sub(1),
+                },
+                Event::Render(RenderEvent::Char('k')) => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_sub(1),
+                },
+
+                Event::Render(RenderEvent::Down) => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_add(1),
+                },
+                Event::Render(RenderEvent::Char('j')) => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_add(1),
+                },
+                Event::Render(RenderEvent::Home) => Mode::Detail { topic, scroll: 0 },
+                Event::Render(RenderEvent::End) => Mode::Detail {
+                    scroll: self
+                        .message(&topic)
+                        .unwrap_or_default()
+                        .lines()
+                        .count()
+                        .saturating_sub(32) as u16,
+                    topic,
+                },
                 x => unimplemented!("{x:?}"),
             },
         };
@@ -263,13 +321,23 @@ impl Model {
     }
 
     fn clear_filter(&mut self) {
+        for m in self.messages.values_mut() {
+            m.topic.highlights.clear();
+        }
         let Mode::Topics { filter, .. } = &mut self.mode else {
             return;
         };
         filter.take();
-        for m in self.messages.values_mut() {
-            m.topic.highlights.clear();
-        }
+    }
+
+    fn select_first(&mut self) {
+        let next = self.topics().next().map(|(t, _)| t.clone());
+        self.selection = next;
+    }
+
+    fn select_last(&mut self) {
+        let last = self.topics().last().map(|(t, _)| t.clone());
+        self.selection = last;
     }
 
     fn select_next(&mut self) {

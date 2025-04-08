@@ -1,7 +1,7 @@
 use ratatui::{
     layout::Constraint::{Fill, Length},
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarState},
 };
 
 use crate::model::{Filter, Mode, Model};
@@ -12,7 +12,7 @@ pub fn render(frame: &mut Frame, model: &Model) {
     frame.render_widget(border, frame.area());
     match model.mode() {
         Mode::Topics { filter } => render_topics(frame, area, model, filter.as_ref()),
-        Mode::Detail { topic } => render_details(frame, area, model, topic),
+        Mode::Detail { topic, scroll } => render_details(frame, area, model, topic, *scroll),
     }
 }
 
@@ -61,8 +61,9 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
     }
 }
 
-fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str) {
-    let [header, pane] = Layout::vertical([Length(1), Fill(0)]).areas(area);
+fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str, scroll: u16) {
+    let [header, pane] = Layout::vertical([Length(2), Fill(0)]).areas(area);
+    let [details, scroller] = Layout::horizontal([Fill(0), Length(1)]).areas(pane);
 
     // Top header with topic name
     frame.render_widget(
@@ -70,7 +71,8 @@ fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str) {
             Span::styled(topic, Style::new().fg(Color::Gray))
                 .italic()
                 .into_centered_line(),
-        ),
+        )
+        .block(Block::new().borders(Borders::BOTTOM)),
         header,
     );
 
@@ -78,18 +80,18 @@ fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str) {
     if model.highlight_copy() {
         style = style.reversed();
     }
+
+    let message = model.message(topic).unwrap_or_default();
     frame.render_widget(
-        Paragraph::new(
-            Text::from_iter(
-                model
-                    .message(topic)
-                    .iter()
-                    .flat_map(|message| message.lines())
-                    .map(Line::raw),
-            )
-            .style(style),
-        )
-        .block(Block::new().borders(Borders::TOP)),
-        pane,
+        Paragraph::new(Text::from_iter(message.lines().map(Line::raw)).style(style))
+            .scroll((scroll, 0)),
+        details,
+    );
+    frame.render_stateful_widget(
+        Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None),
+        scroller,
+        &mut ScrollbarState::new(message.lines().count()).position(scroll as usize),
     );
 }

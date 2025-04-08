@@ -74,19 +74,22 @@ fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str) {
         header,
     );
 
+    let mut style = Style::new();
+    if model.highlight_copy() {
+        style = style.reversed();
+    }
     frame.render_widget(
-        Paragraph::new(Text::from_iter(
-            model
-                .message(topic)
-                .iter()
-                .flat_map(|message| message.lines())
-                .map(Line::raw),
-        ))
-        .block(
-            Block::new()
-                .title(Line::raw("Message"))
-                .borders(Borders::TOP),
-        ),
+        Paragraph::new(
+            Text::from_iter(
+                model
+                    .message(topic)
+                    .iter()
+                    .flat_map(|message| message.lines())
+                    .map(Line::raw),
+            )
+            .style(style),
+        )
+        .block(Block::new().borders(Borders::TOP)),
         pane,
     );
 }

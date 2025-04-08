@@ -218,6 +218,14 @@ impl Model {
                     Mode::Topics { filter: None }
                 }
                 Event::Render(RenderEvent::Back) => Mode::Topics { filter: None },
+
+                Event::Render(RenderEvent::Char(c)) if keys.copy == c => {
+                    if let Some(msg) = self.message(&topic) {
+                        let _ = self.clipboard.set_contents(msg);
+                        self.copy += 2;
+                    }
+                    Mode::Detail { topic }
+                }
                 Event::Update(UpdateEvent::Receive(message)) => {
                     self.on_message(message);
                     Mode::Detail { topic }

@@ -34,6 +34,10 @@ pub struct TopicsConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, Derivative)]
 #[derivative(Default)]
 pub struct ColorConfig {
+    /// Color theme of JSON syntax highlighter
+    #[derivative(Default(value = "\"Solarized (dark)\".into()"))]
+    pub theme: String,
+
     /// How to color the selection
     #[derivative(Default(value = "Color::White"))]
     pub selection: Color,

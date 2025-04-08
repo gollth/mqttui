@@ -6,6 +6,8 @@ use ratatui::{
 
 use crate::model::{Filter, Mode, Model};
 
+pub(crate) const SCROLL_BOTTOM_OFFSET: usize = 32;
+
 pub fn render(frame: &mut Frame, model: &Model) {
     let border = Block::bordered().title(Line::raw("MqtTUI").centered());
     let area = border.inner(frame.area());
@@ -32,7 +34,7 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
         let config = model.config();
         let style = if model.selection().is_some_and(|s| topic.as_str() == s) {
             let mut style = Style::new().bg(config.colors.selection).fg(Color::Black);
-            if model.highlight_copy() {
+            if model.is_copy() {
                 style = style.reversed();
             }
             style
@@ -77,14 +79,13 @@ fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str, scr
     );
 
     let mut style = Style::new();
-    if model.highlight_copy() {
+    if model.is_copy() {
         style = style.reversed();
     }
 
     let message = model.message(topic).unwrap_or_default();
     frame.render_widget(
-        Paragraph::new(Text::from_iter(message.lines().map(Line::raw)).style(style))
-            .scroll((scroll, 0)),
+        Paragraph::new(model.highlight(message, details, scroll).style(style)).scroll((scroll, 0)),
         details,
     );
     frame.render_stateful_widget(
@@ -92,6 +93,7 @@ fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str, scr
             .begin_symbol(None)
             .end_symbol(None),
         scroller,
-        &mut ScrollbarState::new(message.lines().count()).position(scroll as usize),
+        &mut ScrollbarState::new(message.lines().count().saturating_sub(SCROLL_BOTTOM_OFFSET))
+            .position(scroll as usize),
     );
 }

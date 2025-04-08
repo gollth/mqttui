@@ -7,24 +7,31 @@ use std::{
 };
 
 use clipboard::{ClipboardContext, ClipboardProvider};
-use color_eyre::{Result, eyre::eyre};
+use color_eyre::{
+    Result,
+    eyre::{Context, eyre},
+};
 use derivative::Derivative;
 use enum_as_inner::EnumAsInner;
 use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use itertools::Itertools;
 use ratatui::{
+    layout::Rect,
     style::{Color, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
 };
 use serde_json::Value;
 
 use crate::{
     config::Config,
     events::{Event, RenderEvent, UpdateEvent},
+    highlight::Highlighter,
+    ui::SCROLL_BOTTOM_OFFSET,
 };
 
 pub struct Model {
     config: Config,
+    highlighter: Highlighter,
 
     pub shutdown: bool,
     pub counter: i32,
@@ -47,6 +54,7 @@ pub struct Topic {
 pub struct Message {
     pub(crate) topic: Topic,
     pub(crate) data: Value,
+    pub(crate) text: String,
     pub(crate) retain: bool,
     last: Instant,
 }
@@ -72,8 +80,10 @@ pub enum Filter {
 
 impl Model {
     pub fn new() -> Result<Self> {
+        let config = Config::load()?;
         Ok(Self {
-            config: Config::load()?,
+            highlighter: Highlighter::new(&config)?,
+            config,
             clipboard: ClipboardProvider::new().map_err(|e| eyre!("{e}"))?,
             shutdown: false,
             counter: 0,
@@ -111,17 +121,30 @@ impl Model {
             .map(|(_, topic, message)| (topic, message))
     }
 
-    pub fn message(&self, topic: &str) -> Option<String> {
-        let message = self.messages.get(topic)?;
-        serde_json::to_string_pretty(&message.data).ok()
+    pub fn message(&self, topic: &str) -> Option<&str> {
+        Some(&self.messages.get(topic)?.text)
     }
 
     pub fn mode(&self) -> &Mode {
         &self.mode
     }
 
-    pub fn highlight_copy(&self) -> bool {
+    pub fn is_copy(&self) -> bool {
         self.copy > 0
+    }
+
+    pub(crate) fn highlight<'a>(&self, text: &'a str, area: Rect, offset: u16) -> Text<'a> {
+        text.lines()
+            .enumerate()
+            .map(|(i, line)| {
+                if offset <= i as u16 && i as u16 <= offset + area.height {
+                    // Is visible on scroll track, so color it
+                    self.highlighter.highlight(line)
+                } else {
+                    Line::default()
+                }
+            })
+            .collect()
     }
 
     pub fn update(&mut self, event: Event) {
@@ -254,7 +277,7 @@ impl Model {
                 // Copy
                 Event::Render(RenderEvent::Char(c)) if keys.copy == c => {
                     if let Some(msg) = self.message(&topic) {
-                        let _ = self.clipboard.set_contents(msg);
+                        let _ = self.clipboard.set_contents(msg.into());
                         self.copy += 2;
                     }
                     Mode::Detail { topic, scroll }
@@ -285,7 +308,7 @@ impl Model {
                         .unwrap_or_default()
                         .lines()
                         .count()
-                        .saturating_sub(32) as u16,
+                        .saturating_sub(SCROLL_BOTTOM_OFFSET) as u16,
                     topic,
                 },
                 x => unimplemented!("{x:?}"),
@@ -368,8 +391,7 @@ impl Model {
             .or_insert(message);
 
         if self.messages.is_empty() {
-            todo!()
-            // self.selection = None;
+            self.selection = None;
         }
     }
 }
@@ -427,12 +449,17 @@ impl Message {
 
 impl From<paho_mqtt::Message> for Message {
     fn from(value: paho_mqtt::Message) -> Self {
+        let message = serde_json::from_slice(value.payload())
+            .context("Message is not proper JSON")
+            .context(value.topic().to_owned())
+            .unwrap();
         Self {
             topic: Topic {
                 name: value.topic().into(),
                 highlights: Default::default(),
             },
-            data: serde_json::from_slice(value.payload()).unwrap(),
+            text: serde_json::to_string_pretty(&message).unwrap(),
+            data: message,
             retain: value.retained(),
             last: Instant::now(),
         }

@@ -12,6 +12,7 @@ pub fn render(frame: &mut Frame, model: &Model) {
     frame.render_widget(border, frame.area());
     match model.mode() {
         Mode::Topics { filter } => render_topics(frame, area, model, filter.as_ref()),
+        Mode::Detail { topic } => render_details(frame, area, model, topic),
     }
 }
 
@@ -58,4 +59,34 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
             prompt,
         )
     }
+}
+
+fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str) {
+    let [header, pane] = Layout::vertical([Length(1), Fill(0)]).areas(area);
+
+    // Top header with topic name
+    frame.render_widget(
+        Paragraph::new(
+            Span::styled(topic, Style::new().fg(Color::Gray))
+                .italic()
+                .into_centered_line(),
+        ),
+        header,
+    );
+
+    frame.render_widget(
+        Paragraph::new(Text::from_iter(
+            model
+                .message(topic)
+                .iter()
+                .flat_map(|message| message.lines())
+                .map(Line::raw),
+        ))
+        .block(
+            Block::new()
+                .title(Line::raw("Message"))
+                .borders(Borders::TOP),
+        ),
+        pane,
+    );
 }

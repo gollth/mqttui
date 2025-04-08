@@ -28,6 +28,7 @@ pub enum RenderEvent {
     Back,
     Char(char),
     Delete,
+    Select,
 }
 
 #[derive(Debug, PartialEq)]
@@ -73,6 +74,7 @@ fn keys() -> impl Stream<Item = Event> {
         })
         .filter_map(|key| async move {
             match key.code {
+                KeyCode::Enter => Some(Event::Render(RenderEvent::Select)),
                 KeyCode::Char(c) => Some(Event::Render(RenderEvent::Char(c))),
                 KeyCode::Up => Some(Event::Render(RenderEvent::Up)),
                 KeyCode::Down => Some(Event::Render(RenderEvent::Down)),

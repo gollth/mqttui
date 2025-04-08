@@ -2,36 +2,43 @@ use std::{
     cmp::Reverse,
     collections::{BTreeMap, HashSet},
     ops::Deref,
+    rc::Rc,
     time::Instant,
 };
 
 use clipboard::{ClipboardContext, ClipboardProvider};
-use color_eyre::{Result, eyre::eyre};
+use color_eyre::{
+    Result,
+    eyre::{Context, eyre},
+};
 use derivative::Derivative;
 use enum_as_inner::EnumAsInner;
 use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use itertools::Itertools;
 use ratatui::{
+    layout::Rect,
     style::{Color, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
 };
 use serde_json::Value;
 
 use crate::{
     config::Config,
     events::{Event, RenderEvent, UpdateEvent},
+    highlight::Highlighter,
+    ui::SCROLL_BOTTOM_OFFSET,
 };
 
 pub struct Model {
     config: Config,
+    highlighter: Highlighter,
 
     pub shutdown: bool,
     pub counter: i32,
 
+    mode: Mode,
     messages: BTreeMap<String, Message>,
     selection: Option<String>,
-
-    filter: Option<Filter>,
 
     clipboard: ClipboardContext,
     copy: usize,
@@ -47,17 +54,24 @@ pub struct Topic {
 pub struct Message {
     pub(crate) topic: Topic,
     pub(crate) data: Value,
+    pub(crate) text: String,
     pub(crate) retain: bool,
     last: Instant,
 }
 
-#[derive(Derivative, EnumAsInner)]
+#[derive(Debug, Clone, PartialEq, EnumAsInner)]
+pub enum Mode {
+    Topics { filter: Option<Filter> },
+    Detail { topic: String, scroll: u16 },
+}
+
+#[derive(Clone, Derivative, EnumAsInner)]
 #[derivative(Debug, PartialEq)]
 pub enum Filter {
     Keep {
         pattern: String,
         #[derivative(Debug = "ignore", PartialEq = "ignore")]
-        fuzzer: Box<SkimMatcherV2>,
+        fuzzer: Rc<SkimMatcherV2>,
     },
     Skip {
         pattern: String,
@@ -66,15 +80,19 @@ pub enum Filter {
 
 impl Model {
     pub fn new() -> Result<Self> {
+        let config = Config::load()?;
         Ok(Self {
-            config: Config::load()?,
+            highlighter: Highlighter::new(&config)?,
+            config,
             clipboard: ClipboardProvider::new().map_err(|e| eyre!("{e}"))?,
             shutdown: false,
             counter: 0,
             copy: 0,
             messages: Default::default(),
-            selection: Default::default(),
-            filter: Default::default(),
+            selection: None,
+            mode: Mode::Topics {
+                filter: Default::default(),
+            },
         })
     }
 
@@ -92,7 +110,7 @@ impl Model {
             .enumerate()
             .filter_map(|(i, (topic, message))| {
                 let i = -(i as i64);
-                let Some(filter) = self.filter.as_ref() else {
+                let Some(filter) = self.mode().as_topics().and_then(|f| f.as_ref()) else {
                     return Some((i, topic, message));
                 };
 
@@ -103,73 +121,216 @@ impl Model {
             .map(|(_, topic, message)| (topic, message))
     }
 
-    pub fn filter(&self) -> Option<&Filter> {
-        self.filter.as_ref()
+    pub fn message(&self, topic: &str) -> Option<&str> {
+        Some(&self.messages.get(topic)?.text)
     }
 
-    pub fn highlight_copy(&self) -> bool {
+    pub fn mode(&self) -> &Mode {
+        &self.mode
+    }
+
+    pub fn is_copy(&self) -> bool {
         self.copy > 0
     }
 
+    pub(crate) fn highlight<'a>(&self, text: &'a str, area: Rect, offset: u16) -> Text<'a> {
+        text.lines()
+            .enumerate()
+            .map(|(i, line)| {
+                if offset <= i as u16 && i as u16 <= offset + area.height {
+                    // Is visible on scroll track, so color it
+                    self.highlighter.highlight(line)
+                } else {
+                    Line::default()
+                }
+            })
+            .collect()
+    }
+
     pub fn update(&mut self, event: Event) {
-        let keys = &self.config().keys;
-        let insert = self.filter.is_some();
-        match event {
-            Event::Render(RenderEvent::Tick) => {
-                self.copy = self.copy.saturating_sub(1);
-            }
-            Event::Render(RenderEvent::Up) => self.select_next(),
-            Event::Render(RenderEvent::Char('k')) if !insert => self.select_next(),
+        let keys = self.config().keys.clone();
+        self.mode = match self.mode.clone() {
+            Mode::Topics { mut filter } => {
+                let insert = filter.is_some();
+                match event {
+                    Event::Update(UpdateEvent::Receive(message)) => {
+                        self.on_message(message);
+                        Mode::Topics { filter }
+                    }
+                    Event::Render(RenderEvent::Tick) => {
+                        self.copy = self.copy.saturating_sub(1);
+                        Mode::Topics { filter }
+                    }
 
-            Event::Render(RenderEvent::Down) => self.select_previous(),
-            Event::Render(RenderEvent::Char('j')) if !insert => self.select_previous(),
+                    // Quit applicaton
+                    Event::Render(RenderEvent::Char('q')) if !insert => {
+                        self.shutdown = true;
+                        Mode::Topics { filter }
+                    }
 
-            Event::Render(RenderEvent::Back) if self.filter.is_some() => self.clear_filter(),
-            Event::Render(RenderEvent::Back) => {}
+                    // Enter into & out of message pane
+                    Event::Render(RenderEvent::Select) => match self.selection() {
+                        None => Mode::Topics { filter },
+                        Some(topic) => Mode::Detail {
+                            topic: topic.into(),
+                            scroll: 0,
+                        },
+                    },
+                    Event::Render(RenderEvent::Back) if filter.is_some() => {
+                        self.clear_filter();
+                        Mode::Topics { filter }
+                    }
+                    Event::Render(RenderEvent::Back) => Mode::Topics { filter },
 
-            Event::Render(RenderEvent::Delete) if insert => {
-                if let Some(filter) = self.filter.as_mut() {
-                    filter.delete();
+                    // Navigation
+                    Event::Render(RenderEvent::Up) => {
+                        self.select_next();
+                        Mode::Topics { filter }
+                    }
+                    Event::Render(RenderEvent::Char('k')) if !insert => {
+                        self.select_next();
+                        Mode::Topics { filter }
+                    }
+
+                    Event::Render(RenderEvent::Down) => {
+                        self.select_previous();
+                        Mode::Topics { filter }
+                    }
+                    Event::Render(RenderEvent::Char('j')) if !insert => {
+                        self.select_previous();
+                        Mode::Topics { filter }
+                    }
+                    Event::Render(RenderEvent::Home) if !insert => {
+                        self.select_first();
+                        Mode::Topics { filter }
+                    }
+                    Event::Render(RenderEvent::End) if !insert => {
+                        self.select_last();
+                        Mode::Topics { filter }
+                    }
+
+                    Event::Render(RenderEvent::Delete) if insert => {
+                        if let Some(filter) = filter.as_mut() {
+                            filter.delete();
+                        }
+                        self.update_filter();
+                        Mode::Topics { filter }
+                    }
+                    Event::Render(RenderEvent::Delete) => Mode::Topics { filter },
+
+                    // Copy topic
+                    Event::Render(RenderEvent::Char(c)) if !insert && keys.copy == c => {
+                        if let Some(msg) = self.selection() {
+                            let _ = self.clipboard.set_contents(msg.into());
+                            self.copy += 2;
+                        }
+                        Mode::Topics { filter }
+                    }
+
+                    // Searching
+                    Event::Render(RenderEvent::Char(c)) if !insert && keys.search == c => {
+                        Mode::Topics {
+                            filter: Some(Filter::keep()),
+                        }
+                    }
+                    Event::Render(RenderEvent::Char(c)) if !insert && keys.ignore == c => {
+                        Mode::Topics {
+                            filter: Some(Filter::skip()),
+                        }
+                    }
+
+                    // Text input
+                    Event::Render(RenderEvent::Char(c)) if insert => {
+                        if let Some(filter) = filter.as_mut() {
+                            filter.push(c)
+                        }
+                        self.update_filter();
+                        Mode::Topics { filter }
+                    }
+                    Event::Render(RenderEvent::Char(_)) => Mode::Topics { filter },
+                    Event::Render(RenderEvent::Home | RenderEvent::End) => Mode::Topics { filter },
                 }
-                self.update_filter();
             }
-            Event::Render(RenderEvent::Delete) => {}
-
-            Event::Render(RenderEvent::Char('q')) if !insert => self.shutdown = true,
-            Event::Render(RenderEvent::Char(c)) if !insert && keys.copy == c => {
-                if let Some(msg) = self.selection.as_deref() {
-                    let _ = self.clipboard.set_contents(msg.into());
-                    self.copy += 2;
+            Mode::Detail { topic, scroll } => match event {
+                // Update
+                Event::Update(UpdateEvent::Receive(message)) => {
+                    self.on_message(message);
+                    Mode::Detail { topic, scroll }
                 }
-            }
-            Event::Render(RenderEvent::Char(c)) if !insert && keys.search == c => {
-                self.filter = Some(Filter::keep())
-            }
-            Event::Render(RenderEvent::Char(c)) if !insert && keys.ignore == c => {
-                self.filter = Some(Filter::skip())
-            }
-
-            Event::Render(RenderEvent::Char(c)) if insert => {
-                if let Some(filter) = self.filter.as_mut() {
-                    filter.push(c)
+                Event::Render(RenderEvent::Tick) => {
+                    self.copy = self.copy.saturating_sub(1);
+                    Mode::Detail { topic, scroll }
                 }
-                self.update_filter()
-            }
 
-            Event::Render(RenderEvent::Char(_)) => {}
-            Event::Update(UpdateEvent::Receive(message)) => {
-                self.on_message(message);
-            }
-        }
+                // Quit
+                Event::Render(RenderEvent::Char('q')) => {
+                    self.shutdown = true;
+                    Mode::Detail { topic, scroll }
+                }
+
+                // Back to topics overview
+                Event::Render(RenderEvent::Back) => {
+                    self.clear_filter();
+                    Mode::Topics { filter: None }
+                }
+
+                // Copy
+                Event::Render(RenderEvent::Char(c)) if keys.copy == c => {
+                    if let Some(msg) = self.message(&topic) {
+                        let _ = self.clipboard.set_contents(msg.into());
+                        self.copy += 2;
+                    }
+                    Mode::Detail { topic, scroll }
+                }
+
+                // Navigation
+                Event::Render(RenderEvent::Up) => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_sub(1),
+                },
+                Event::Render(RenderEvent::Char('k')) => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_sub(1),
+                },
+
+                Event::Render(RenderEvent::Down) => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_add(1),
+                },
+                Event::Render(RenderEvent::Char('j')) => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_add(1),
+                },
+                Event::Render(RenderEvent::Home) => Mode::Detail { topic, scroll: 0 },
+                Event::Render(RenderEvent::End) => Mode::Detail {
+                    scroll: self
+                        .message(&topic)
+                        .unwrap_or_default()
+                        .lines()
+                        .count()
+                        .saturating_sub(SCROLL_BOTTOM_OFFSET) as u16,
+                    topic,
+                },
+                x => unimplemented!("{x:?}"),
+            },
+        };
     }
 
     fn update_filter(&mut self) {
-        let filter = self
-            .filter
-            .as_ref()
-            .expect("to only call `Model::update_filter()` with an active filter set");
-        for m in self.messages.values_mut() {
-            m.topic.highlights = filter.highlights(&m.topic);
+        let Mode::Topics {
+            filter: Some(filter),
+        } = self.mode()
+        else {
+            return;
+        };
+
+        let highlights = self
+            .messages
+            .keys()
+            .map(|topic| filter.highlights(topic))
+            .collect::<Vec<_>>();
+        for (m, highlights) in self.messages.values_mut().zip(highlights) {
+            m.topic.highlights = highlights;
         }
 
         if !self
@@ -183,30 +344,43 @@ impl Model {
     }
 
     fn clear_filter(&mut self) {
-        self.filter = None;
         for m in self.messages.values_mut() {
             m.topic.highlights.clear();
         }
+        let Mode::Topics { filter, .. } = &mut self.mode else {
+            return;
+        };
+        filter.take();
+    }
+
+    fn select_first(&mut self) {
+        let next = self.topics().next().map(|(t, _)| t.clone());
+        self.selection = next;
+    }
+
+    fn select_last(&mut self) {
+        let last = self.topics().last().map(|(t, _)| t.clone());
+        self.selection = last;
     }
 
     fn select_next(&mut self) {
-        let previous = self
+        let next = self
             .topics()
             .position(|(t, _)| self.selection.as_deref().is_some_and(|s| s == t.as_str()))
             .map(|n| (n.saturating_sub(1)).max(0))
             .unwrap_or(0);
-        let next = self.topics().nth(previous).map(|(topic, _)| topic.clone());
+        let next = self.topics().nth(next).map(|(topic, _)| topic.clone());
         self.selection = next;
     }
 
     fn select_previous(&mut self) {
-        let next = self
+        let previous = self
             .topics()
             .position(|(t, _)| self.selection.as_deref().is_some_and(|s| s == t.as_str()))
             .map(|n| (n + 1).min(self.topics().count().saturating_sub(1)))
             .unwrap_or(0);
-        let next = self.topics().nth(next).map(|(topic, _)| topic.clone());
-        self.selection = next;
+        let previous = self.topics().nth(previous).map(|(topic, _)| topic.clone());
+        self.selection = previous;
     }
 
     fn on_message(&mut self, message: Message) {
@@ -275,12 +449,17 @@ impl Message {
 
 impl From<paho_mqtt::Message> for Message {
     fn from(value: paho_mqtt::Message) -> Self {
+        let message = serde_json::from_slice(value.payload())
+            .context("Message is not proper JSON")
+            .context(value.topic().to_owned())
+            .unwrap();
         Self {
             topic: Topic {
                 name: value.topic().into(),
                 highlights: Default::default(),
             },
-            data: serde_json::from_slice(value.payload()).unwrap(),
+            text: serde_json::to_string_pretty(&message).unwrap(),
+            data: message,
             retain: value.retained(),
             last: Instant::now(),
         }

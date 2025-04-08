@@ -24,3 +24,5 @@ url = "2.5.4"
 xdg = "2.5.2"
 toml = "0.8.20"
 humantime-serde = "1.1.1"
+syntect = { version = "5.2.0", default-features = false }
+syntect-tui = "3.0.5"

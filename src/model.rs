@@ -465,6 +465,8 @@ impl Model {
 
         if self.messages.is_empty() {
             self.selection = None;
+        } else if self.selection().is_none() {
+            self.select_next();
         }
     }
 }

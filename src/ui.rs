@@ -67,7 +67,7 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
             ),
             prompt,
         );
-        let x = (input.chars().count() as u16).min(prompt.width - 1);
+        let x = PROMPT.chars().count() as u16 + 1 + filter.cursor();
         frame.set_cursor_position((prompt.x + x, prompt.y + 1));
     }
 }
@@ -120,7 +120,13 @@ fn render_details(
 
     let (input, style) = match jq {
         Jaqqer::Dormant => return,
-        Jaqqer::Prompt(prompt) => (format!("{PROMPT} {prompt}"), Style::new().fg(Color::Blue)),
+        Jaqqer::Prompt { prompt, cursor } => {
+            let input = format!("{PROMPT} {prompt}");
+            let x = ((input.chars().count() - prompt.chars().count()) as u16 + cursor)
+                .min(footer.width - 1);
+            frame.set_cursor_position((footer.x + x, footer.y + 1));
+            (input, Style::new().fg(Color::Blue))
+        }
         Jaqqer::Active(prompt) => (
             format!("{PROMPT} {prompt}"),
             Style::new().fg(Color::LightRed),
@@ -135,7 +141,4 @@ fn render_details(
         ),
         footer,
     );
-
-    let x = (input.chars().count() as u16).min(footer.width - 1);
-    frame.set_cursor_position((footer.x + x, footer.y + 1));
 }

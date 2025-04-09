@@ -78,11 +78,13 @@ pub enum Mode {
 pub enum Filter {
     Keep {
         pattern: String,
+        cursor: u16,
         #[derivative(Debug = "ignore", PartialEq = "ignore")]
         fuzzer: Rc<SkimMatcherV2>,
     },
     Skip {
         pattern: String,
+        cursor: u16,
     },
 }
 
@@ -233,6 +235,13 @@ impl Model {
                         Mode::Topics { filter }
                     }
 
+                    Event::Render(RenderEvent::Backspace) if insert => {
+                        if let Some(filter) = filter.as_mut() {
+                            filter.backspace();
+                        }
+                        self.apply_filter();
+                        Mode::Topics { filter }
+                    }
                     Event::Render(RenderEvent::Delete) if insert => {
                         if let Some(filter) = filter.as_mut() {
                             filter.delete();
@@ -240,6 +249,7 @@ impl Model {
                         self.apply_filter();
                         Mode::Topics { filter }
                     }
+                    Event::Render(RenderEvent::Backspace) => Mode::Topics { filter },
                     Event::Render(RenderEvent::Delete) => Mode::Topics { filter },
 
                     // Copy topic
@@ -271,15 +281,23 @@ impl Model {
                         self.apply_filter();
                         Mode::Topics { filter }
                     }
+                    Event::Render(RenderEvent::Left) => Mode::Topics {
+                        filter: filter.map(|f| f.move_cursor(-1)),
+                    },
+                    Event::Render(RenderEvent::Right) => Mode::Topics {
+                        filter: filter.map(|f| f.move_cursor(1)),
+                    },
+                    Event::Render(RenderEvent::Home) if insert => Mode::Topics {
+                        filter: filter.map(|f| f.move_cursor(-100)),
+                    },
+                    Event::Render(RenderEvent::End) if insert => Mode::Topics {
+                        filter: filter.map(|f| f.move_cursor(100)),
+                    },
                     Event::Render(RenderEvent::Char(_)) => Mode::Topics { filter },
                     Event::Render(RenderEvent::Home | RenderEvent::End) => Mode::Topics { filter },
                 }
             }
-            Mode::Detail {
-                topic,
-                scroll,
-                mut jq,
-            } => match event {
+            Mode::Detail { topic, scroll, jq } => match event {
                 // Update
                 Event::Update(UpdateEvent::Receive(message)) => {
                     self.on_message(message);
@@ -352,6 +370,26 @@ impl Model {
                     scroll: scroll.saturating_add(1),
                     jq,
                 },
+                Event::Render(RenderEvent::Left) => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.move_cursor(-1),
+                },
+                Event::Render(RenderEvent::Right) => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.move_cursor(1),
+                },
+                Event::Render(RenderEvent::Home) if jq.is_prompt() => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.move_cursor(-100),
+                },
+                Event::Render(RenderEvent::End) if jq.is_prompt() => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.move_cursor(100),
+                },
                 Event::Render(RenderEvent::Home) => Mode::Detail {
                     topic,
                     scroll: 0,
@@ -369,18 +407,21 @@ impl Model {
                 },
 
                 // Text input
-                Event::Render(RenderEvent::Char(c)) => {
-                    if let Some(prompt) = jq.as_prompt_mut() {
-                        prompt.push(c);
-                    }
-                    Mode::Detail { topic, scroll, jq }
-                }
-                Event::Render(RenderEvent::Delete) => {
-                    if let Some(prompt) = jq.as_prompt_mut() {
-                        prompt.pop();
-                    }
-                    Mode::Detail { topic, scroll, jq }
-                }
+                Event::Render(RenderEvent::Char(c)) => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.input(c),
+                },
+                Event::Render(RenderEvent::Backspace) => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.backspace(),
+                },
+                Event::Render(RenderEvent::Delete) => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.delete(),
+                },
 
                 // Enter on no prompt, just stay
                 Event::Render(RenderEvent::Select) => Mode::Detail { topic, scroll, jq },
@@ -546,12 +587,14 @@ impl Filter {
         Self::Keep {
             pattern: Default::default(),
             fuzzer: Default::default(),
+            cursor: 0,
         }
     }
 
     fn skip() -> Self {
         Self::Skip {
             pattern: Default::default(),
+            cursor: 0,
         }
     }
 
@@ -565,28 +608,80 @@ impl Filter {
     pub(crate) fn pattern(&self) -> &str {
         match self {
             Self::Keep { pattern, .. } => pattern.as_str(),
-            Self::Skip { pattern } => pattern.as_str(),
+            Self::Skip { pattern, .. } => pattern.as_str(),
+        }
+    }
+
+    pub(crate) fn cursor(&self) -> u16 {
+        match self {
+            Self::Keep { cursor, .. } => *cursor,
+            Self::Skip { cursor, .. } => *cursor,
         }
     }
 
     fn push(&mut self, c: char) {
         match self {
-            Self::Keep { pattern, .. } => pattern.push(c),
-            Self::Skip { pattern } => pattern.push(c),
+            Self::Keep {
+                pattern, cursor, ..
+            }
+            | Self::Skip { pattern, cursor } => {
+                pattern.push(c);
+                *cursor += 1;
+            }
+        };
+    }
+
+    fn backspace(&mut self) {
+        match self {
+            Self::Keep {
+                pattern, cursor, ..
+            }
+            | Self::Skip {
+                pattern, cursor, ..
+            } => {
+                if !pattern.is_empty() && *cursor > 0 {
+                    pattern.remove(*cursor as usize - 1);
+                    *cursor -= 1;
+                }
+            }
         };
     }
 
     fn delete(&mut self) {
         match self {
-            Self::Keep { pattern, .. } => pattern.pop(),
-            Self::Skip { pattern } => pattern.pop(),
+            Self::Keep {
+                pattern, cursor, ..
+            }
+            | Self::Skip {
+                pattern, cursor, ..
+            } => {
+                let c = *cursor as usize;
+                if !pattern.is_empty() && c < pattern.chars().count() {
+                    pattern.remove(c);
+                }
+            }
         };
+    }
+
+    fn move_cursor(mut self, offset: i16) -> Self {
+        match &mut self {
+            Self::Keep {
+                pattern, cursor, ..
+            }
+            | Self::Skip { pattern, cursor } => {
+                *cursor =
+                    ((*cursor as i16) + offset).clamp(0, pattern.chars().count() as i16) as u16;
+            }
+        }
+        self
     }
 
     fn highlights(&self, haystack: &str) -> HashSet<usize> {
         match self {
             // Use cached values
-            Self::Keep { pattern, fuzzer } => fuzzer
+            Self::Keep {
+                pattern, fuzzer, ..
+            } => fuzzer
                 .fuzzy_indices(haystack, pattern)
                 .into_iter()
                 .flat_map(|(_, xs)| xs)
@@ -597,9 +692,13 @@ impl Filter {
 
     fn score(&self, i: i64, haystack: &str) -> Option<i64> {
         match self {
-            Self::Keep { pattern, .. } | Self::Skip { pattern } if pattern.is_empty() => Some(i),
-            Self::Keep { pattern, fuzzer } => fuzzer.fuzzy_match(haystack, pattern),
-            Self::Skip { pattern } if !haystack.contains(pattern) => Some(i),
+            Self::Keep { pattern, .. } | Self::Skip { pattern, .. } if pattern.is_empty() => {
+                Some(i)
+            }
+            Self::Keep {
+                pattern, fuzzer, ..
+            } => fuzzer.fuzzy_match(haystack, pattern),
+            Self::Skip { pattern, .. } if !haystack.contains(pattern) => Some(i),
             Self::Skip { .. } => None,
         }
     }

@@ -201,11 +201,10 @@ impl Model {
                             scroll: 0,
                         },
                     },
-                    Event::Render(RenderEvent::Back) if filter.is_some() => {
+                    Event::Render(RenderEvent::Back) => {
                         self.clear_filter();
-                        Mode::Topics { filter }
+                        Mode::Topics { filter: None }
                     }
-                    Event::Render(RenderEvent::Back) => Mode::Topics { filter },
 
                     // Navigation
                     Event::Render(RenderEvent::Up) => {

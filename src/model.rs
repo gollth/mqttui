@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     cmp::Reverse,
     collections::{BTreeMap, HashSet},
     ops::Deref,
@@ -26,6 +27,7 @@ use crate::{
     config::Config,
     events::{Event, RenderEvent, UpdateEvent},
     highlight::Highlighter,
+    jq::Jaqqer,
     ui::SCROLL_BOTTOM_OFFSET,
 };
 
@@ -59,10 +61,16 @@ pub struct Message {
     last: Instant,
 }
 
-#[derive(Debug, Clone, PartialEq, EnumAsInner)]
+#[derive(Debug, Clone, EnumAsInner)]
 pub enum Mode {
-    Topics { filter: Option<Filter> },
-    Detail { topic: String, scroll: u16 },
+    Topics {
+        filter: Option<Filter>,
+    },
+    Detail {
+        topic: String,
+        scroll: u16,
+        jq: Jaqqer,
+    },
 }
 
 #[derive(Clone, Derivative, EnumAsInner)]
@@ -121,8 +129,24 @@ impl Model {
             .map(|(_, topic, message)| (topic, message))
     }
 
-    pub fn message(&self, topic: &str) -> Option<&str> {
-        Some(&self.messages.get(topic)?.text)
+    pub fn message(&self, topic: &str) -> Option<Cow<str>> {
+        let m = self.messages.get(topic)?;
+        match self.mode() {
+            Mode::Detail { jq, .. } if !jq.is_dormant() => {
+                match jq.run(m.data.clone()) {
+                    Err(e) => {
+                        // TODO: Forward the `e` to the UI somehow
+                        Some(Cow::Borrowed(&m.text))
+                    }
+                    Ok(xs) => Some(Cow::Owned(
+                        xs.into_iter()
+                            .filter_map(|x| serde_json::to_string_pretty(&x).ok())
+                            .join("\n"),
+                    )),
+                }
+            }
+            _ => Some(Cow::Borrowed(&m.text)),
+        }
     }
 
     pub fn mode(&self) -> &Mode {
@@ -173,6 +197,7 @@ impl Model {
                         None => Mode::Topics { filter },
                         Some(topic) => Mode::Detail {
                             topic: topic.into(),
+                            jq: Jaqqer::default(),
                             scroll: 0,
                         },
                     },
@@ -213,7 +238,7 @@ impl Model {
                         if let Some(filter) = filter.as_mut() {
                             filter.delete();
                         }
-                        self.update_filter();
+                        self.apply_filter();
                         Mode::Topics { filter }
                     }
                     Event::Render(RenderEvent::Delete) => Mode::Topics { filter },
@@ -244,28 +269,51 @@ impl Model {
                         if let Some(filter) = filter.as_mut() {
                             filter.push(c)
                         }
-                        self.update_filter();
+                        self.apply_filter();
                         Mode::Topics { filter }
                     }
                     Event::Render(RenderEvent::Char(_)) => Mode::Topics { filter },
                     Event::Render(RenderEvent::Home | RenderEvent::End) => Mode::Topics { filter },
                 }
             }
-            Mode::Detail { topic, scroll } => match event {
+            Mode::Detail {
+                topic,
+                scroll,
+                mut jq,
+            } => match event {
                 // Update
                 Event::Update(UpdateEvent::Receive(message)) => {
                     self.on_message(message);
-                    Mode::Detail { topic, scroll }
+                    Mode::Detail { topic, scroll, jq }
                 }
                 Event::Render(RenderEvent::Tick) => {
                     self.copy = self.copy.saturating_sub(1);
-                    Mode::Detail { topic, scroll }
+                    Mode::Detail { topic, scroll, jq }
                 }
 
+                // Filtering
+                Event::Render(RenderEvent::Char(c)) if !jq.is_prompt() && keys.search == c => {
+                    Mode::Detail {
+                        topic,
+                        scroll,
+                        jq: jq.edit(),
+                    }
+                }
+                Event::Render(RenderEvent::Back) if !jq.is_dormant() => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.clear(),
+                },
+                Event::Render(RenderEvent::Select) if jq.is_prompt() => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.activate(),
+                },
+
                 // Quit
-                Event::Render(RenderEvent::Char('q')) => {
+                Event::Render(RenderEvent::Char('q')) if !jq.is_prompt() => {
                     self.shutdown = true;
-                    Mode::Detail { topic, scroll }
+                    Mode::Detail { topic, scroll, jq }
                 }
 
                 // Back to topics overview
@@ -275,33 +323,41 @@ impl Model {
                 }
 
                 // Copy
-                Event::Render(RenderEvent::Char(c)) if keys.copy == c => {
+                Event::Render(RenderEvent::Char(c)) if !jq.is_prompt() && keys.copy == c => {
                     if let Some(msg) = self.message(&topic) {
                         let _ = self.clipboard.set_contents(msg.into());
                         self.copy += 2;
                     }
-                    Mode::Detail { topic, scroll }
+                    Mode::Detail { topic, scroll, jq }
                 }
 
                 // Navigation
                 Event::Render(RenderEvent::Up) => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_sub(1),
+                    jq,
                 },
-                Event::Render(RenderEvent::Char('k')) => Mode::Detail {
+                Event::Render(RenderEvent::Char('k')) if !jq.is_prompt() => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_sub(1),
+                    jq,
                 },
 
                 Event::Render(RenderEvent::Down) => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_add(1),
+                    jq,
                 },
-                Event::Render(RenderEvent::Char('j')) => Mode::Detail {
+                Event::Render(RenderEvent::Char('j')) if !jq.is_prompt() => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_add(1),
+                    jq,
                 },
-                Event::Render(RenderEvent::Home) => Mode::Detail { topic, scroll: 0 },
+                Event::Render(RenderEvent::Home) => Mode::Detail {
+                    topic,
+                    scroll: 0,
+                    jq,
+                },
                 Event::Render(RenderEvent::End) => Mode::Detail {
                     scroll: self
                         .message(&topic)
@@ -310,36 +366,54 @@ impl Model {
                         .count()
                         .saturating_sub(SCROLL_BOTTOM_OFFSET) as u16,
                     topic,
+                    jq,
                 },
-                x => unimplemented!("{x:?}"),
+
+                // Text input
+                Event::Render(RenderEvent::Char(c)) => {
+                    if let Some(prompt) = jq.as_prompt_mut() {
+                        prompt.push(c);
+                    }
+                    Mode::Detail { topic, scroll, jq }
+                }
+                Event::Render(RenderEvent::Delete) => {
+                    if let Some(prompt) = jq.as_prompt_mut() {
+                        prompt.pop();
+                    }
+                    Mode::Detail { topic, scroll, jq }
+                }
+
+                // Enter on no prompt, just stay
+                Event::Render(RenderEvent::Select) => Mode::Detail { topic, scroll, jq },
             },
         };
     }
 
-    fn update_filter(&mut self) {
-        let Mode::Topics {
-            filter: Some(filter),
-        } = self.mode()
-        else {
-            return;
-        };
+    fn apply_filter(&mut self) {
+        match self.mode() {
+            Mode::Topics {
+                filter: Some(filter),
+            } => {
+                let highlights = self
+                    .messages
+                    .keys()
+                    .map(|topic| filter.highlights(topic))
+                    .collect::<Vec<_>>();
+                for (m, highlights) in self.messages.values_mut().zip(highlights) {
+                    m.topic.highlights = highlights;
+                }
 
-        let highlights = self
-            .messages
-            .keys()
-            .map(|topic| filter.highlights(topic))
-            .collect::<Vec<_>>();
-        for (m, highlights) in self.messages.values_mut().zip(highlights) {
-            m.topic.highlights = highlights;
-        }
-
-        if !self
-            .topics()
-            .any(|(topic, _)| self.selection().is_some_and(|s| s == topic))
-            && self.topics().count() > 0
-        {
-            let first = self.topics().next().map(|(topic, _)| topic.clone());
-            self.selection = first;
+                if !self
+                    .topics()
+                    .any(|(topic, _)| self.selection().is_some_and(|s| s == topic))
+                    && self.topics().count() > 0
+                {
+                    let first = self.topics().next().map(|(topic, _)| topic.clone());
+                    self.selection = first;
+                }
+            }
+            Mode::Detail { jq, .. } if jq.is_active() => {}
+            _ => {}
         }
     }
 

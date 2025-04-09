@@ -4,9 +4,13 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarState},
 };
 
-use crate::model::{Filter, Mode, Model};
+use crate::{
+    jq::Jaqqer,
+    model::{Filter, Mode, Model},
+};
 
 pub(crate) const SCROLL_BOTTOM_OFFSET: usize = 32;
+pub(crate) const PROMPT: &str = "❯";
 
 pub fn render(frame: &mut Frame, model: &Model) {
     let border = Block::bordered().title(Line::raw("MqtTUI").centered());
@@ -14,7 +18,9 @@ pub fn render(frame: &mut Frame, model: &Model) {
     frame.render_widget(border, frame.area());
     match model.mode() {
         Mode::Topics { filter } => render_topics(frame, area, model, filter.as_ref()),
-        Mode::Detail { topic, scroll } => render_details(frame, area, model, topic, *scroll),
+        Mode::Detail { topic, scroll, jq } => {
+            render_details(frame, area, model, topic, jq, *scroll)
+        }
     }
 }
 
@@ -52,19 +58,34 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
     frame.render_widget(list, overview);
 
     if let Some(filter) = filter {
+        let input = format!("{PROMPT} {}", filter.pattern());
         frame.render_widget(
-            Paragraph::new(format!(">> {}", filter.pattern())).block(
+            Paragraph::new(input.as_str()).block(
                 Block::new()
                     .title(Line::raw(filter.kind()).centered())
                     .borders(Borders::TOP),
             ),
             prompt,
-        )
+        );
+        let x = (input.chars().count() as u16).min(prompt.width - 1);
+        frame.set_cursor_position((prompt.x + x, prompt.y + 1));
     }
 }
 
-fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str, scroll: u16) {
-    let [header, pane] = Layout::vertical([Length(2), Fill(0)]).areas(area);
+fn render_details(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    topic: &str,
+    jq: &Jaqqer,
+    scroll: u16,
+) {
+    let [header, pane, footer] = Layout::vertical([
+        Length(2),
+        Fill(0),
+        Length(if jq.is_dormant() { 0 } else { 3 }),
+    ])
+    .areas(area);
     let [details, scroller] = Layout::horizontal([Fill(0), Length(1)]).areas(pane);
 
     // Top header with topic name
@@ -85,7 +106,7 @@ fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str, scr
 
     let message = model.message(topic).unwrap_or_default();
     frame.render_widget(
-        Paragraph::new(model.highlight(message, details, scroll).style(style)).scroll((scroll, 0)),
+        Paragraph::new(model.highlight(&message, details, scroll).style(style)).scroll((scroll, 0)),
         details,
     );
     frame.render_stateful_widget(
@@ -96,4 +117,25 @@ fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str, scr
         &mut ScrollbarState::new(message.lines().count().saturating_sub(SCROLL_BOTTOM_OFFSET))
             .position(scroll as usize),
     );
+
+    let (input, style) = match jq {
+        Jaqqer::Dormant => return,
+        Jaqqer::Prompt(prompt) => (format!("{PROMPT} {prompt}"), Style::new().fg(Color::Blue)),
+        Jaqqer::Active(prompt) => (
+            format!("{PROMPT} {prompt}"),
+            Style::new().fg(Color::LightRed),
+        ),
+    };
+
+    frame.render_widget(
+        Paragraph::new(vec![Line::raw(&input).style(style)]).block(
+            Block::new()
+                .title(Line::raw("JQ-Filter").centered())
+                .borders(Borders::TOP),
+        ),
+        footer,
+    );
+
+    let x = (input.chars().count() as u16).min(footer.width - 1);
+    frame.set_cursor_position((footer.x + x, footer.y + 1));
 }

@@ -134,19 +134,14 @@ impl Model {
     pub fn message(&self, topic: &str) -> Option<Cow<str>> {
         let m = self.messages.get(topic)?;
         match self.mode() {
-            Mode::Detail { jq, .. } if !jq.is_dormant() => {
-                match jq.run(m.data.clone()) {
-                    Err(e) => {
-                        // TODO: Forward the `e` to the UI somehow
-                        Some(Cow::Borrowed(&m.text))
-                    }
-                    Ok(xs) => Some(Cow::Owned(
-                        xs.into_iter()
-                            .filter_map(|x| serde_json::to_string_pretty(&x).ok())
-                            .join("\n"),
-                    )),
-                }
-            }
+            Mode::Detail { jq, .. } if jq.is_active() => match jq.run(m.data.clone()) {
+                Err(_) => Some(Cow::Borrowed(&m.text)),
+                Ok(xs) => Some(Cow::Owned(
+                    xs.into_iter()
+                        .filter_map(|x| serde_json::to_string_pretty(&x).ok())
+                        .join("\n"),
+                )),
+            },
             _ => Some(Cow::Borrowed(&m.text)),
         }
     }
@@ -276,7 +271,7 @@ impl Model {
                     // Text input
                     Event::Render(RenderEvent::Char(c)) if insert => {
                         if let Some(filter) = filter.as_mut() {
-                            filter.push(c)
+                            filter.insert(c)
                         }
                         self.apply_filter();
                         Mode::Topics { filter }
@@ -321,11 +316,13 @@ impl Model {
                     scroll,
                     jq: jq.clear(),
                 },
-                Event::Render(RenderEvent::Select) if jq.is_prompt() => Mode::Detail {
-                    topic,
-                    scroll,
-                    jq: jq.activate(),
-                },
+                Event::Render(RenderEvent::Select) if jq.is_prompt() && jq.errors().is_empty() => {
+                    Mode::Detail {
+                        topic,
+                        scroll,
+                        jq: jq.activate(),
+                    }
+                }
 
                 // Quit
                 Event::Render(RenderEvent::Char('q')) if !jq.is_prompt() => {
@@ -619,13 +616,13 @@ impl Filter {
         }
     }
 
-    fn push(&mut self, c: char) {
+    fn insert(&mut self, c: char) {
         match self {
             Self::Keep {
                 pattern, cursor, ..
             }
             | Self::Skip { pattern, cursor } => {
-                pattern.push(c);
+                pattern.insert(*cursor as usize, c);
                 *cursor += 1;
             }
         };

@@ -1,3 +1,5 @@
+use codesnake::{CodeWidth, Label, LineIndex};
+use itertools::{Itertools, repeat_n};
 use ratatui::{
     layout::Constraint::{Fill, Length},
     prelude::*,
@@ -10,7 +12,7 @@ use crate::{
 };
 
 pub(crate) const SCROLL_BOTTOM_OFFSET: usize = 32;
-pub(crate) const PROMPT: &str = "❯";
+pub(crate) const PROMPT: &str = "❯ ";
 
 pub fn render(frame: &mut Frame, model: &Model) {
     let border = Block::bordered().title(Line::raw("MqtTUI").centered());
@@ -58,7 +60,7 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
     frame.render_widget(list, overview);
 
     if let Some(filter) = filter {
-        let input = format!("{PROMPT} {}", filter.pattern());
+        let input = format!("{PROMPT}{}", filter.pattern());
         frame.render_widget(
             Paragraph::new(input.as_str()).block(
                 Block::new()
@@ -67,7 +69,7 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
             ),
             prompt,
         );
-        let x = PROMPT.chars().count() as u16 + 1 + filter.cursor();
+        let x = PROMPT.chars().count() as u16 + filter.cursor();
         frame.set_cursor_position((prompt.x + x, prompt.y + 1));
     }
 }
@@ -83,7 +85,7 @@ fn render_details(
     let [header, pane, footer] = Layout::vertical([
         Length(2),
         Fill(0),
-        Length(if jq.is_dormant() { 0 } else { 3 }),
+        Length(if jq.is_dormant() { 0 } else { 6 }),
     ])
     .areas(area);
     let [details, scroller] = Layout::horizontal([Fill(0), Length(1)]).areas(pane);
@@ -118,23 +120,71 @@ fn render_details(
             .position(scroll as usize),
     );
 
-    let (input, style) = match jq {
-        Jaqqer::Dormant => return,
-        Jaqqer::Prompt { prompt, cursor } => {
-            let input = format!("{PROMPT} {prompt}");
+    // let jq = jq.render(frame, footer).block();
+    let filter = match jq {
+        Jaqqer::Dormant => Default::default(),
+        Jaqqer::Prompt {
+            prompt,
+            cursor,
+            errors,
+        } => {
+            let mut input = format!("{PROMPT}{prompt}");
             let x = ((input.chars().count() - prompt.chars().count()) as u16 + cursor)
                 .min(footer.width - 1);
             frame.set_cursor_position((footer.x + x, footer.y + 1));
-            (input, Style::new().fg(Color::Blue))
+
+            if !prompt.is_empty() && !errors.is_empty() {
+                let idx = LineIndex::new(prompt);
+                let block = codesnake::Block::new(
+                    &idx,
+                    errors
+                        .iter()
+                        .map(|e| Label::new(e.span.clone()).with_text(&e.message)),
+                );
+                if let Some(block) = block {
+                    let block = block.map_code(|c| CodeWidth::new(c, c.len()));
+                    input = format!("{block}")
+                        .replacen("1 │ ", PROMPT, 1)
+                        .lines()
+                        .skip(1)
+                        .map(|line| {
+                            line.replacen(
+                                "  ┆ ",
+                                &repeat_n(' ', PROMPT.chars().count()).collect::<String>(),
+                                1,
+                            )
+                        })
+                        .join("\n");
+                }
+            }
+
+            Paragraph::new(input).style(if errors.is_empty() {
+                Color::LightBlue
+            } else {
+                Color::Yellow
+            })
         }
-        Jaqqer::Active(prompt) => (
-            format!("{PROMPT} {prompt}"),
-            Style::new().fg(Color::LightRed),
-        ),
+        Jaqqer::Active { prompt, errors, .. } => {
+            let mut input = format!("{PROMPT}{prompt}");
+
+            for error in errors {
+                input.push('\n');
+                input.push_str(&error.display());
+            }
+            Paragraph::new(input).style(
+                Style::new()
+                    .fg(if errors.is_empty() {
+                        Color::White
+                    } else {
+                        Color::Red
+                    })
+                    .bold(),
+            )
+        }
     };
 
     frame.render_widget(
-        Paragraph::new(vec![Line::raw(&input).style(style)]).block(
+        filter.block(
             Block::new()
                 .title(Line::raw("JQ-Filter").centered())
                 .borders(Borders::TOP),

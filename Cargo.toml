@@ -1,7 +1,10 @@
 [package]
 name = "mqttui"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+authors = ["thore.goll@arculus.de"]
+repository = "https://git.arculus.de/gollth/mqttui"
+description = "Explore & search through your MQTT traffic"
 
 [dependencies]
 color-eyre = "0.6.3"

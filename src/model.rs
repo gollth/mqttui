@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     cmp::Reverse,
     collections::{BTreeMap, HashSet},
     ops::Deref,
@@ -26,6 +27,7 @@ use crate::{
     config::Config,
     events::{Event, RenderEvent, UpdateEvent},
     highlight::Highlighter,
+    jq::Jaqqer,
     ui::SCROLL_BOTTOM_OFFSET,
 };
 
@@ -59,10 +61,16 @@ pub struct Message {
     last: Instant,
 }
 
-#[derive(Debug, Clone, PartialEq, EnumAsInner)]
+#[derive(Debug, Clone, EnumAsInner)]
 pub enum Mode {
-    Topics { filter: Option<Filter> },
-    Detail { topic: String, scroll: u16 },
+    Topics {
+        filter: Option<Filter>,
+    },
+    Detail {
+        topic: String,
+        scroll: u16,
+        jq: Jaqqer,
+    },
 }
 
 #[derive(Clone, Derivative, EnumAsInner)]
@@ -70,11 +78,13 @@ pub enum Mode {
 pub enum Filter {
     Keep {
         pattern: String,
+        cursor: u16,
         #[derivative(Debug = "ignore", PartialEq = "ignore")]
         fuzzer: Rc<SkimMatcherV2>,
     },
     Skip {
         pattern: String,
+        cursor: u16,
     },
 }
 
@@ -121,8 +131,19 @@ impl Model {
             .map(|(_, topic, message)| (topic, message))
     }
 
-    pub fn message(&self, topic: &str) -> Option<&str> {
-        Some(&self.messages.get(topic)?.text)
+    pub fn message(&self, topic: &str) -> Option<Cow<str>> {
+        let m = self.messages.get(topic)?;
+        match self.mode() {
+            Mode::Detail { jq, .. } if jq.is_active() => match jq.run(m.data.clone()) {
+                Err(_) => Some(Cow::Borrowed(&m.text)),
+                Ok(xs) => Some(Cow::Owned(
+                    xs.into_iter()
+                        .filter_map(|x| serde_json::to_string_pretty(&x).ok())
+                        .join("\n"),
+                )),
+            },
+            _ => Some(Cow::Borrowed(&m.text)),
+        }
     }
 
     pub fn mode(&self) -> &Mode {
@@ -163,6 +184,10 @@ impl Model {
                     }
 
                     // Quit applicaton
+                    Event::Render(RenderEvent::Quit) => {
+                        self.shutdown = true;
+                        Mode::Topics { filter }
+                    }
                     Event::Render(RenderEvent::Char('q')) if !insert => {
                         self.shutdown = true;
                         Mode::Topics { filter }
@@ -173,14 +198,14 @@ impl Model {
                         None => Mode::Topics { filter },
                         Some(topic) => Mode::Detail {
                             topic: topic.into(),
+                            jq: Jaqqer::default(),
                             scroll: 0,
                         },
                     },
-                    Event::Render(RenderEvent::Back) if filter.is_some() => {
+                    Event::Render(RenderEvent::Back) => {
                         self.clear_filter();
-                        Mode::Topics { filter }
+                        Mode::Topics { filter: None }
                     }
-                    Event::Render(RenderEvent::Back) => Mode::Topics { filter },
 
                     // Navigation
                     Event::Render(RenderEvent::Up) => {
@@ -209,13 +234,21 @@ impl Model {
                         Mode::Topics { filter }
                     }
 
+                    Event::Render(RenderEvent::Backspace) if insert => {
+                        if let Some(filter) = filter.as_mut() {
+                            filter.backspace();
+                        }
+                        self.apply_filter();
+                        Mode::Topics { filter }
+                    }
                     Event::Render(RenderEvent::Delete) if insert => {
                         if let Some(filter) = filter.as_mut() {
                             filter.delete();
                         }
-                        self.update_filter();
+                        self.apply_filter();
                         Mode::Topics { filter }
                     }
+                    Event::Render(RenderEvent::Backspace) => Mode::Topics { filter },
                     Event::Render(RenderEvent::Delete) => Mode::Topics { filter },
 
                     // Copy topic
@@ -242,30 +275,67 @@ impl Model {
                     // Text input
                     Event::Render(RenderEvent::Char(c)) if insert => {
                         if let Some(filter) = filter.as_mut() {
-                            filter.push(c)
+                            filter.insert(c)
                         }
-                        self.update_filter();
+                        self.apply_filter();
                         Mode::Topics { filter }
                     }
+                    Event::Render(RenderEvent::Left) => Mode::Topics {
+                        filter: filter.map(|f| f.move_cursor(-1)),
+                    },
+                    Event::Render(RenderEvent::Right) => Mode::Topics {
+                        filter: filter.map(|f| f.move_cursor(1)),
+                    },
+                    Event::Render(RenderEvent::Home) if insert => Mode::Topics {
+                        filter: filter.map(|f| f.move_cursor(-100)),
+                    },
+                    Event::Render(RenderEvent::End) if insert => Mode::Topics {
+                        filter: filter.map(|f| f.move_cursor(100)),
+                    },
                     Event::Render(RenderEvent::Char(_)) => Mode::Topics { filter },
                     Event::Render(RenderEvent::Home | RenderEvent::End) => Mode::Topics { filter },
                 }
             }
-            Mode::Detail { topic, scroll } => match event {
+            Mode::Detail { topic, scroll, jq } => match event {
                 // Update
                 Event::Update(UpdateEvent::Receive(message)) => {
                     self.on_message(message);
-                    Mode::Detail { topic, scroll }
+                    Mode::Detail { topic, scroll, jq }
                 }
                 Event::Render(RenderEvent::Tick) => {
                     self.copy = self.copy.saturating_sub(1);
-                    Mode::Detail { topic, scroll }
+                    Mode::Detail { topic, scroll, jq }
+                }
+
+                // Filtering
+                Event::Render(RenderEvent::Char(c)) if !jq.is_prompt() && keys.search == c => {
+                    Mode::Detail {
+                        topic,
+                        scroll,
+                        jq: jq.edit(),
+                    }
+                }
+                Event::Render(RenderEvent::Back) if !jq.is_dormant() => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.clear(),
+                },
+                Event::Render(RenderEvent::Select) if jq.is_prompt() && jq.errors().is_empty() => {
+                    Mode::Detail {
+                        topic,
+                        scroll,
+                        jq: jq.activate(),
+                    }
                 }
 
                 // Quit
-                Event::Render(RenderEvent::Char('q')) => {
+                Event::Render(RenderEvent::Quit) => {
                     self.shutdown = true;
-                    Mode::Detail { topic, scroll }
+                    Mode::Detail { topic, scroll, jq }
+                }
+                Event::Render(RenderEvent::Char('q')) if !jq.is_prompt() => {
+                    self.shutdown = true;
+                    Mode::Detail { topic, scroll, jq }
                 }
 
                 // Back to topics overview
@@ -275,33 +345,61 @@ impl Model {
                 }
 
                 // Copy
-                Event::Render(RenderEvent::Char(c)) if keys.copy == c => {
+                Event::Render(RenderEvent::Char(c)) if !jq.is_prompt() && keys.copy == c => {
                     if let Some(msg) = self.message(&topic) {
                         let _ = self.clipboard.set_contents(msg.into());
                         self.copy += 2;
                     }
-                    Mode::Detail { topic, scroll }
+                    Mode::Detail { topic, scroll, jq }
                 }
 
                 // Navigation
                 Event::Render(RenderEvent::Up) => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_sub(1),
+                    jq,
                 },
-                Event::Render(RenderEvent::Char('k')) => Mode::Detail {
+                Event::Render(RenderEvent::Char('k')) if !jq.is_prompt() => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_sub(1),
+                    jq,
                 },
 
                 Event::Render(RenderEvent::Down) => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_add(1),
+                    jq,
                 },
-                Event::Render(RenderEvent::Char('j')) => Mode::Detail {
+                Event::Render(RenderEvent::Char('j')) if !jq.is_prompt() => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_add(1),
+                    jq,
                 },
-                Event::Render(RenderEvent::Home) => Mode::Detail { topic, scroll: 0 },
+                Event::Render(RenderEvent::Left) => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.move_cursor(-1),
+                },
+                Event::Render(RenderEvent::Right) => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.move_cursor(1),
+                },
+                Event::Render(RenderEvent::Home) if jq.is_prompt() => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.move_cursor(-100),
+                },
+                Event::Render(RenderEvent::End) if jq.is_prompt() => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.move_cursor(100),
+                },
+                Event::Render(RenderEvent::Home) => Mode::Detail {
+                    topic,
+                    scroll: 0,
+                    jq,
+                },
                 Event::Render(RenderEvent::End) => Mode::Detail {
                     scroll: self
                         .message(&topic)
@@ -310,36 +408,57 @@ impl Model {
                         .count()
                         .saturating_sub(SCROLL_BOTTOM_OFFSET) as u16,
                     topic,
+                    jq,
                 },
-                x => unimplemented!("{x:?}"),
+
+                // Text input
+                Event::Render(RenderEvent::Char(c)) => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.input(c),
+                },
+                Event::Render(RenderEvent::Backspace) => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.backspace(),
+                },
+                Event::Render(RenderEvent::Delete) => Mode::Detail {
+                    topic,
+                    scroll,
+                    jq: jq.delete(),
+                },
+
+                // Enter on no prompt, just stay
+                Event::Render(RenderEvent::Select) => Mode::Detail { topic, scroll, jq },
             },
         };
     }
 
-    fn update_filter(&mut self) {
-        let Mode::Topics {
-            filter: Some(filter),
-        } = self.mode()
-        else {
-            return;
-        };
+    fn apply_filter(&mut self) {
+        match self.mode() {
+            Mode::Topics {
+                filter: Some(filter),
+            } => {
+                let highlights = self
+                    .messages
+                    .keys()
+                    .map(|topic| filter.highlights(topic))
+                    .collect::<Vec<_>>();
+                for (m, highlights) in self.messages.values_mut().zip(highlights) {
+                    m.topic.highlights = highlights;
+                }
 
-        let highlights = self
-            .messages
-            .keys()
-            .map(|topic| filter.highlights(topic))
-            .collect::<Vec<_>>();
-        for (m, highlights) in self.messages.values_mut().zip(highlights) {
-            m.topic.highlights = highlights;
-        }
-
-        if !self
-            .topics()
-            .any(|(topic, _)| self.selection().is_some_and(|s| s == topic))
-            && self.topics().count() > 0
-        {
-            let first = self.topics().next().map(|(topic, _)| topic.clone());
-            self.selection = first;
+                if !self
+                    .topics()
+                    .any(|(topic, _)| self.selection().is_some_and(|s| s == topic))
+                    && self.topics().count() > 0
+                {
+                    let first = self.topics().next().map(|(topic, _)| topic.clone());
+                    self.selection = first;
+                }
+            }
+            Mode::Detail { jq, .. } if jq.is_active() => {}
+            _ => {}
         }
     }
 
@@ -392,6 +511,8 @@ impl Model {
 
         if self.messages.is_empty() {
             self.selection = None;
+        } else if self.selection().is_none() {
+            self.select_next();
         }
     }
 }
@@ -471,12 +592,14 @@ impl Filter {
         Self::Keep {
             pattern: Default::default(),
             fuzzer: Default::default(),
+            cursor: 0,
         }
     }
 
     fn skip() -> Self {
         Self::Skip {
             pattern: Default::default(),
+            cursor: 0,
         }
     }
 
@@ -490,28 +613,80 @@ impl Filter {
     pub(crate) fn pattern(&self) -> &str {
         match self {
             Self::Keep { pattern, .. } => pattern.as_str(),
-            Self::Skip { pattern } => pattern.as_str(),
+            Self::Skip { pattern, .. } => pattern.as_str(),
         }
     }
 
-    fn push(&mut self, c: char) {
+    pub(crate) fn cursor(&self) -> u16 {
         match self {
-            Self::Keep { pattern, .. } => pattern.push(c),
-            Self::Skip { pattern } => pattern.push(c),
+            Self::Keep { cursor, .. } => *cursor,
+            Self::Skip { cursor, .. } => *cursor,
+        }
+    }
+
+    fn insert(&mut self, c: char) {
+        match self {
+            Self::Keep {
+                pattern, cursor, ..
+            }
+            | Self::Skip { pattern, cursor } => {
+                pattern.insert(*cursor as usize, c);
+                *cursor += 1;
+            }
+        };
+    }
+
+    fn backspace(&mut self) {
+        match self {
+            Self::Keep {
+                pattern, cursor, ..
+            }
+            | Self::Skip {
+                pattern, cursor, ..
+            } => {
+                if !pattern.is_empty() && *cursor > 0 {
+                    pattern.remove(*cursor as usize - 1);
+                    *cursor -= 1;
+                }
+            }
         };
     }
 
     fn delete(&mut self) {
         match self {
-            Self::Keep { pattern, .. } => pattern.pop(),
-            Self::Skip { pattern } => pattern.pop(),
+            Self::Keep {
+                pattern, cursor, ..
+            }
+            | Self::Skip {
+                pattern, cursor, ..
+            } => {
+                let c = *cursor as usize;
+                if !pattern.is_empty() && c < pattern.chars().count() {
+                    pattern.remove(c);
+                }
+            }
         };
+    }
+
+    fn move_cursor(mut self, offset: i16) -> Self {
+        match &mut self {
+            Self::Keep {
+                pattern, cursor, ..
+            }
+            | Self::Skip { pattern, cursor } => {
+                *cursor =
+                    ((*cursor as i16) + offset).clamp(0, pattern.chars().count() as i16) as u16;
+            }
+        }
+        self
     }
 
     fn highlights(&self, haystack: &str) -> HashSet<usize> {
         match self {
             // Use cached values
-            Self::Keep { pattern, fuzzer } => fuzzer
+            Self::Keep {
+                pattern, fuzzer, ..
+            } => fuzzer
                 .fuzzy_indices(haystack, pattern)
                 .into_iter()
                 .flat_map(|(_, xs)| xs)
@@ -522,9 +697,13 @@ impl Filter {
 
     fn score(&self, i: i64, haystack: &str) -> Option<i64> {
         match self {
-            Self::Keep { pattern, .. } | Self::Skip { pattern } if pattern.is_empty() => Some(i),
-            Self::Keep { pattern, fuzzer } => fuzzer.fuzzy_match(haystack, pattern),
-            Self::Skip { pattern } if !haystack.contains(pattern) => Some(i),
+            Self::Keep { pattern, .. } | Self::Skip { pattern, .. } if pattern.is_empty() => {
+                Some(i)
+            }
+            Self::Keep {
+                pattern, fuzzer, ..
+            } => fuzzer.fuzzy_match(haystack, pattern),
+            Self::Skip { pattern, .. } if !haystack.contains(pattern) => Some(i),
             Self::Skip { .. } => None,
         }
     }

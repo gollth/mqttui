@@ -1,12 +1,18 @@
+use codesnake::{CodeWidth, Label, LineIndex};
+use itertools::{Itertools, repeat_n};
 use ratatui::{
     layout::Constraint::{Fill, Length},
     prelude::*,
     widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarState},
 };
 
-use crate::model::{Filter, Mode, Model};
+use crate::{
+    jq::Jaqqer,
+    model::{Filter, Mode, Model},
+};
 
 pub(crate) const SCROLL_BOTTOM_OFFSET: usize = 32;
+pub(crate) const PROMPT: &str = "❯ ";
 
 pub fn render(frame: &mut Frame, model: &Model) {
     let border = Block::bordered().title(Line::raw("MqtTUI").centered());
@@ -14,7 +20,9 @@ pub fn render(frame: &mut Frame, model: &Model) {
     frame.render_widget(border, frame.area());
     match model.mode() {
         Mode::Topics { filter } => render_topics(frame, area, model, filter.as_ref()),
-        Mode::Detail { topic, scroll } => render_details(frame, area, model, topic, *scroll),
+        Mode::Detail { topic, scroll, jq } => {
+            render_details(frame, area, model, topic, jq, *scroll)
+        }
     }
 }
 
@@ -52,19 +60,34 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
     frame.render_widget(list, overview);
 
     if let Some(filter) = filter {
+        let input = format!("{PROMPT}{}", filter.pattern());
         frame.render_widget(
-            Paragraph::new(format!(">> {}", filter.pattern())).block(
+            Paragraph::new(input.as_str()).block(
                 Block::new()
                     .title(Line::raw(filter.kind()).centered())
                     .borders(Borders::TOP),
             ),
             prompt,
-        )
+        );
+        let x = PROMPT.chars().count() as u16 + filter.cursor();
+        frame.set_cursor_position((prompt.x + x, prompt.y + 1));
     }
 }
 
-fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str, scroll: u16) {
-    let [header, pane] = Layout::vertical([Length(2), Fill(0)]).areas(area);
+fn render_details(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    topic: &str,
+    jq: &Jaqqer,
+    scroll: u16,
+) {
+    let [header, pane, footer] = Layout::vertical([
+        Length(2),
+        Fill(0),
+        Length(if jq.is_dormant() { 0 } else { 6 }),
+    ])
+    .areas(area);
     let [details, scroller] = Layout::horizontal([Fill(0), Length(1)]).areas(pane);
 
     // Top header with topic name
@@ -85,7 +108,7 @@ fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str, scr
 
     let message = model.message(topic).unwrap_or_default();
     frame.render_widget(
-        Paragraph::new(model.highlight(message, details, scroll).style(style)).scroll((scroll, 0)),
+        Paragraph::new(model.highlight(&message, details, scroll).style(style)).scroll((scroll, 0)),
         details,
     );
     frame.render_stateful_widget(
@@ -95,5 +118,77 @@ fn render_details(frame: &mut Frame, area: Rect, model: &Model, topic: &str, scr
         scroller,
         &mut ScrollbarState::new(message.lines().count().saturating_sub(SCROLL_BOTTOM_OFFSET))
             .position(scroll as usize),
+    );
+
+    // let jq = jq.render(frame, footer).block();
+    let filter = match jq {
+        Jaqqer::Dormant => Default::default(),
+        Jaqqer::Prompt {
+            prompt,
+            cursor,
+            errors,
+        } => {
+            let mut input = format!("{PROMPT}{prompt}");
+            let x = ((input.chars().count() - prompt.chars().count()) as u16 + cursor)
+                .min(footer.width - 1);
+            frame.set_cursor_position((footer.x + x, footer.y + 1));
+
+            if !prompt.is_empty() && !errors.is_empty() {
+                let idx = LineIndex::new(prompt);
+                let block = codesnake::Block::new(
+                    &idx,
+                    errors
+                        .iter()
+                        .map(|e| Label::new(e.span.clone()).with_text(&e.message)),
+                );
+                if let Some(block) = block {
+                    let block = block.map_code(|c| CodeWidth::new(c, c.len()));
+                    input = format!("{block}")
+                        .replacen("1 │ ", PROMPT, 1)
+                        .lines()
+                        .skip(1)
+                        .map(|line| {
+                            line.replacen(
+                                "  ┆ ",
+                                &repeat_n(' ', PROMPT.chars().count()).collect::<String>(),
+                                1,
+                            )
+                        })
+                        .join("\n");
+                }
+            }
+
+            Paragraph::new(input).style(if errors.is_empty() {
+                Color::LightBlue
+            } else {
+                Color::Yellow
+            })
+        }
+        Jaqqer::Active { prompt, errors, .. } => {
+            let mut input = format!("{PROMPT}{prompt}");
+
+            for error in errors {
+                input.push('\n');
+                input.push_str(&error.display());
+            }
+            Paragraph::new(input).style(
+                Style::new()
+                    .fg(if errors.is_empty() {
+                        Color::White
+                    } else {
+                        Color::Red
+                    })
+                    .bold(),
+            )
+        }
+    };
+
+    frame.render_widget(
+        filter.block(
+            Block::new()
+                .title(Line::raw("JQ-Filter").centered())
+                .borders(Borders::TOP),
+        ),
+        footer,
     );
 }

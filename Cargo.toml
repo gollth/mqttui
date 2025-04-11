@@ -26,3 +26,7 @@ toml = "0.8.20"
 humantime-serde = "1.1.1"
 syntect = { version = "5.2.0", default-features = false }
 syntect-tui = "3.0.5"
+jaq-core = "2.1.1"
+jaq-json = { version = "1.1.1", features = ["serde_json"] }
+jaq-std = "2.1.0"
+codesnake = "0.2.1"

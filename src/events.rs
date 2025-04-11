@@ -1,6 +1,7 @@
 use std::pin::pin;
 use std::time::Duration;
 
+use crossterm::event::KeyModifiers;
 use crossterm::event::{Event as CrossEvent, EventStream, KeyCode, KeyEventKind};
 use enum_as_inner::EnumAsInner;
 use futures::{Stream, StreamExt, stream};
@@ -34,6 +35,7 @@ pub enum RenderEvent {
     Home,
     End,
     Select,
+    Quit,
 }
 
 #[derive(Debug, PartialEq)]
@@ -80,6 +82,9 @@ fn keys() -> impl Stream<Item = Event> {
         .filter_map(|key| async move {
             match key.code {
                 KeyCode::Enter => Some(Event::Render(RenderEvent::Select)),
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    Some(Event::Render(RenderEvent::Quit))
+                }
                 KeyCode::Char(c) => Some(Event::Render(RenderEvent::Char(c))),
                 KeyCode::Up => Some(Event::Render(RenderEvent::Up)),
                 KeyCode::Down => Some(Event::Render(RenderEvent::Down)),

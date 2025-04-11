@@ -184,6 +184,10 @@ impl Model {
                     }
 
                     // Quit applicaton
+                    Event::Render(RenderEvent::Quit) => {
+                        self.shutdown = true;
+                        Mode::Topics { filter }
+                    }
                     Event::Render(RenderEvent::Char('q')) if !insert => {
                         self.shutdown = true;
                         Mode::Topics { filter }
@@ -325,6 +329,10 @@ impl Model {
                 }
 
                 // Quit
+                Event::Render(RenderEvent::Quit) => {
+                    self.shutdown = true;
+                    Mode::Detail { topic, scroll, jq }
+                }
                 Event::Render(RenderEvent::Char('q')) if !jq.is_prompt() => {
                     self.shutdown = true;
                     Mode::Detail { topic, scroll, jq }

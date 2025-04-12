@@ -22,6 +22,7 @@ use ratatui::{
     text::{Line, Span, Text},
 };
 use serde_json::Value;
+use url::Url;
 
 use crate::{
     config::Config,
@@ -35,8 +36,10 @@ pub struct Model {
     config: Config,
     highlighter: Highlighter,
 
+    pub connected: bool,
     pub shutdown: bool,
     pub counter: i32,
+    broker: Url,
 
     mode: Mode,
     messages: BTreeMap<String, Message>,
@@ -89,12 +92,14 @@ pub enum Filter {
 }
 
 impl Model {
-    pub fn new() -> Result<Self> {
+    pub fn new(broker: Url) -> Result<Self> {
         let config = Config::load()?;
         Ok(Self {
             highlighter: Highlighter::new(&config)?,
             config,
+            broker,
             clipboard: ClipboardProvider::new().map_err(|e| eyre!("{e}"))?,
+            connected: false,
             shutdown: false,
             counter: 0,
             copy: 0,
@@ -146,6 +151,10 @@ impl Model {
         }
     }
 
+    pub fn broker(&self) -> &Url {
+        &self.broker
+    }
+
     pub fn mode(&self) -> &Mode {
         &self.mode
     }
@@ -180,6 +189,15 @@ impl Model {
                     }
                     Event::Render(RenderEvent::Tick) => {
                         self.copy = self.copy.saturating_sub(1);
+                        Mode::Topics { filter }
+                    }
+
+                    Event::Render(RenderEvent::Connect) => {
+                        self.connected = true;
+                        Mode::Topics { filter }
+                    }
+                    Event::Render(RenderEvent::Disconnect) => {
+                        self.connected = false;
                         Mode::Topics { filter }
                     }
 
@@ -304,6 +322,14 @@ impl Model {
                 }
                 Event::Render(RenderEvent::Tick) => {
                     self.copy = self.copy.saturating_sub(1);
+                    Mode::Detail { topic, scroll, jq }
+                }
+                Event::Render(RenderEvent::Connect) => {
+                    self.connected = true;
+                    Mode::Detail { topic, scroll, jq }
+                }
+                Event::Render(RenderEvent::Disconnect) => {
+                    self.connected = false;
                     Mode::Detail { topic, scroll, jq }
                 }
 
@@ -550,6 +576,7 @@ impl Topic {
 impl Message {
     fn on_receive(&mut self, value: &Value) {
         self.data = value.clone();
+        self.text = serde_json::to_string_pretty(value).unwrap();
         self.last = Instant::now();
     }
 
@@ -568,20 +595,20 @@ impl Message {
     }
 }
 
-impl From<paho_mqtt::Message> for Message {
-    fn from(value: paho_mqtt::Message) -> Self {
-        let message = serde_json::from_slice(value.payload())
+impl From<rumqttc::Publish> for Message {
+    fn from(value: rumqttc::Publish) -> Self {
+        let message = serde_json::from_slice(&value.payload)
             .context("Message is not proper JSON")
-            .context(value.topic().to_owned())
+            .context(value.topic.clone())
             .unwrap();
         Self {
             topic: Topic {
-                name: value.topic().into(),
+                name: value.topic,
                 highlights: Default::default(),
             },
             text: serde_json::to_string_pretty(&message).unwrap(),
             data: message,
-            retain: value.retained(),
+            retain: value.retain,
             last: Instant::now(),
         }
     }

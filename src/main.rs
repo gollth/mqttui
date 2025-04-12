@@ -1,18 +1,14 @@
 use clap::Parser;
-use color_eyre::{
-    Result,
-    eyre::{Context, eyre},
-};
+use color_eyre::{Result, eyre::eyre};
 use mqttui::{
     config::Config,
-    events::{self, Event},
+    events::{self},
     model::Model,
     ui,
 };
-use paho_mqtt::{AsyncClient, ConnectOptions, CreateOptionsBuilder};
 use petname::petname;
 use ratatui::{Terminal, prelude::Backend};
-use tokio::sync::mpsc::UnboundedReceiver;
+use rumqttc::{AsyncClient, EventLoop, MqttOptions};
 use url::Url;
 
 /// Mqtt TUI
@@ -37,20 +33,18 @@ async fn main() -> Result<()> {
         println!("{}", Config::path()?.display());
         return Ok(());
     }
-    let mut client = init(args.broker).await?;
-    let rx = events::handler(&mut client).await;
 
     let mut terminal = ratatui::init();
     // use ratatui::backend::TestBackend;
     // let mut terminal = Terminal::new(TestBackend::new(10, 10)).unwrap();
 
-    let result = run(&mut terminal, rx).await;
+    let result = run(args.broker, &mut terminal).await;
     ratatui::restore();
     result?;
     Ok(())
 }
 
-async fn init(broker: Url) -> Result<AsyncClient> {
+async fn init(broker: &Url) -> (AsyncClient, EventLoop) {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         ratatui::restore();
@@ -58,32 +52,27 @@ async fn init(broker: Url) -> Result<AsyncClient> {
     }));
 
     let name = env!("CARGO_PKG_NAME");
+    let name = format!("{name}-{}", petname(2, "-").unwrap());
 
-    let client = AsyncClient::new(
-        CreateOptionsBuilder::new()
-            .server_uri(broker.clone())
-            .client_id(format!("{name}-{}", petname(2, "-").unwrap()))
-            .finalize(),
-    )?;
-    client
-        .connect(ConnectOptions::default())
-        .await
-        .context(broker)
-        .context("Failed to connect to MQTT broker")?;
-    Ok(client)
+    let mut options = MqttOptions::new(
+        name,
+        broker.host_str().unwrap(),
+        broker.port_or_known_default().unwrap_or(1883),
+    );
+    options.set_max_packet_size(1000000, 1024);
+    let (client, eventloop) = AsyncClient::new(options, 10);
+    (client, eventloop)
 }
 
-async fn run<B: Backend>(
-    terminal: &mut Terminal<B>,
-    mut events: UnboundedReceiver<Event>,
-) -> Result<()> {
-    let mut model = Model::new()?;
+async fn run<B: Backend>(broker: Url, terminal: &mut Terminal<B>) -> Result<()> {
+    let (client, eventloop) = init(&broker).await;
+    let mut events = events::start_handler(client, eventloop).await?;
+    let mut model = Model::new(broker)?;
     while !model.shutdown {
         let event = events.recv().await.ok_or(eyre!("runtime died"))?;
         let rendering = event.is_render();
 
         model.update(event);
-        // eprintln!("{model:#?}");
 
         if rendering {
             terminal.draw(|frame| ui::render(frame, &model))?;

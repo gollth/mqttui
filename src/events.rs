@@ -1,11 +1,12 @@
 use std::pin::pin;
 use std::time::Duration;
 
+use color_eyre::Result;
 use crossterm::event::KeyModifiers;
 use crossterm::event::{Event as CrossEvent, EventStream, KeyCode, KeyEventKind};
 use enum_as_inner::EnumAsInner;
 use futures::{Stream, StreamExt, stream};
-use paho_mqtt::{AsyncClient, QoS};
+use rumqttc::{AsyncClient, ConnectionError, EventLoop, Incoming, QoS};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task;
@@ -36,6 +37,8 @@ pub enum RenderEvent {
     End,
     Select,
     Quit,
+    Connect,
+    Disconnect,
 }
 
 #[derive(Debug, PartialEq)]
@@ -43,19 +46,44 @@ pub enum UpdateEvent {
     Receive(Message),
 }
 
-pub async fn handler(client: &mut AsyncClient) -> UnboundedReceiver<Event> {
+pub async fn start_handler(
+    client: AsyncClient,
+    mut eventloop: EventLoop,
+) -> Result<UnboundedReceiver<Event>> {
     let (tx, rx) = unbounded_channel();
-    client.subscribe("#", QoS::default());
-
-    let stream = client.get_stream(None);
+    let tx2 = tx.clone();
     task::spawn(async move {
-        let events = stream::select(keys(), messages(stream));
-        let mut events = pin!(stream::select(events, tick()));
+        loop {
+            if eventloop.poll().await.is_err() {
+                sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+
+            let _ = client.subscribe("#", QoS::AtMostOnce).await;
+            let _ = tx2.send(Event::Render(RenderEvent::Connect));
+            loop {
+                match eventloop.poll().await {
+                    Err(ConnectionError::Io(_)) => {
+                        let _ = tx2.send(Event::Render(RenderEvent::Disconnect));
+                        break;
+                    }
+                    Ok(rumqttc::Event::Incoming(Incoming::Publish(message))) => {
+                        let _ = tx2.send(Event::Update(UpdateEvent::Receive(message.into())));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
+
+    task::spawn(async move {
+        let mut events = pin!(stream::select(keys(), tick()));
         while let Some(event) = events.next().await {
             let _ = tx.send(event);
         }
     });
-    rx
+
+    Ok(rx)
 }
 
 fn tick() -> impl Stream<Item = Event> {
@@ -63,12 +91,6 @@ fn tick() -> impl Stream<Item = Event> {
         sleep(TICK).await;
         Some((Event::Render(RenderEvent::Tick), ()))
     })
-}
-
-fn messages(stream: impl Stream<Item = Option<paho_mqtt::Message>>) -> impl Stream<Item = Event> {
-    stream
-        .filter_map(|message| async move { message })
-        .map(|message| Event::Update(UpdateEvent::Receive(message.into())))
 }
 
 fn keys() -> impl Stream<Item = Event> {

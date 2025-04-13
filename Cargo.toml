@@ -1,6 +1,6 @@
 [package]
 name = "mqttui"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 authors = ["thore.goll@arculus.de"]
 repository = "https://git.arculus.de/gollth/mqttui"

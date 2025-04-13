@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## 1.1.0
 
 * Switch to [rumqttc](https://docs.rs/rumqttc/latest/rumqttc/)
 * Show connection status in header

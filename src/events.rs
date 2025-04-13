@@ -12,11 +12,9 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::task;
 use tokio::time::sleep;
 
-use crate::model::Message;
-
 const TICK: Duration = Duration::from_millis(100);
 
-#[derive(Debug, PartialEq, EnumAsInner)]
+#[derive(Debug, EnumAsInner)]
 pub enum Event {
     Render(RenderEvent),
     Update(UpdateEvent),
@@ -47,9 +45,9 @@ pub enum RenderEvent {
     Disconnect,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum UpdateEvent {
-    Receive(Message),
+    Receive(rumqttc::Publish),
 }
 
 pub async fn start(
@@ -75,7 +73,7 @@ pub async fn start(
                         break;
                     }
                     Ok(rumqttc::Event::Incoming(Incoming::Publish(message))) => {
-                        let _ = tx2.send(Event::Update(UpdateEvent::Receive(message.into())));
+                        let _ = tx2.send(Event::Update(UpdateEvent::Receive(message)));
                     }
                     _ => {}
                 }

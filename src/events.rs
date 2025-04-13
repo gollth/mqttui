@@ -21,6 +21,12 @@ pub enum Event {
     Render(RenderEvent),
     Update(UpdateEvent),
 }
+impl Event {
+    pub fn is_disconnect(&self) -> bool {
+        self.as_render()
+            .is_some_and(|e| e == &RenderEvent::Disconnect)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RenderEvent {
@@ -46,7 +52,7 @@ pub enum UpdateEvent {
     Receive(Message),
 }
 
-pub async fn start_handler(
+pub async fn start(
     client: AsyncClient,
     mut eventloop: EventLoop,
 ) -> Result<UnboundedReceiver<Event>> {
@@ -56,6 +62,7 @@ pub async fn start_handler(
         loop {
             if eventloop.poll().await.is_err() {
                 sleep(Duration::from_millis(500)).await;
+                let _ = tx2.send(Event::Render(RenderEvent::Disconnect));
                 continue;
             }
 

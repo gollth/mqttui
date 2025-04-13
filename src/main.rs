@@ -1,5 +1,8 @@
 use clap::Parser;
-use color_eyre::{Result, eyre::eyre};
+use color_eyre::{
+    Result,
+    eyre::{Context, eyre},
+};
 use mqttui::{
     config::Config,
     events::{self},
@@ -20,16 +23,23 @@ struct Args {
     #[arg(short('b'), long, default_value = "mqtt://localhost:1883", value_parser = validate_url)]
     broker: Url,
 
-    /// Print the path of the default config
+    /// Immediately quit, when the connection to the broker is lost
+    ///
+    /// By default the TUI will stay open and try to automatically reconnect when the broker comes
+    /// back online
+    #[arg(short('q'), long)]
+    quit: bool,
+
+    /// Print the path of where the config file is read from
     #[arg(long)]
-    print_config: bool,
+    print_config_path: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
     let args = Args::parse();
-    if args.print_config {
+    if args.print_config_path {
         println!("{}", Config::path()?.display());
         return Ok(());
     }
@@ -38,7 +48,7 @@ async fn main() -> Result<()> {
     // use ratatui::backend::TestBackend;
     // let mut terminal = Terminal::new(TestBackend::new(10, 10)).unwrap();
 
-    let result = run(args.broker, &mut terminal).await;
+    let result = run(args.broker, &mut terminal, !args.quit).await;
     ratatui::restore();
     result?;
     Ok(())
@@ -64,13 +74,17 @@ async fn init(broker: &Url) -> (AsyncClient, EventLoop) {
     (client, eventloop)
 }
 
-async fn run<B: Backend>(broker: Url, terminal: &mut Terminal<B>) -> Result<()> {
+async fn run<B: Backend>(broker: Url, terminal: &mut Terminal<B>, reconnect: bool) -> Result<()> {
     let (client, eventloop) = init(&broker).await;
-    let mut events = events::start_handler(client, eventloop).await?;
-    let mut model = Model::new(broker)?;
+    let mut events = events::start(client, eventloop).await?;
+    let mut model = Model::new(broker.clone())?;
     while !model.shutdown {
         let event = events.recv().await.ok_or(eyre!("runtime died"))?;
         let rendering = event.is_render();
+
+        if !reconnect && event.is_disconnect() {
+            return Err(eyre!(broker)).context("Connection to broker lost");
+        }
 
         model.update(event);
 

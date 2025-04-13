@@ -5,6 +5,7 @@
 * Switch to [rumqttc](https://docs.rs/rumqttc/latest/rumqttc/)
 * Show connection status in header
 * Automatically reconnect if broker restarts
+* `-q/--quit` do immediately disconnect on connection loss
 
 ## 1.0.0
 

@@ -22,6 +22,7 @@ use ratatui::{
     text::{Line, Span, Text},
 };
 use serde_json::Value;
+use url::Url;
 
 use crate::{
     config::Config,
@@ -35,8 +36,10 @@ pub struct Model {
     config: Config,
     highlighter: Highlighter,
 
+    pub connected: bool,
     pub shutdown: bool,
     pub counter: i32,
+    broker: Url,
 
     mode: Mode,
     messages: BTreeMap<String, Message>,
@@ -52,10 +55,10 @@ pub struct Topic {
     highlights: HashSet<usize>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Message {
     pub(crate) topic: Topic,
-    pub(crate) data: Value,
+    pub(crate) data: Result<Value, String>,
     pub(crate) text: String,
     pub(crate) retain: bool,
     last: Instant,
@@ -89,12 +92,14 @@ pub enum Filter {
 }
 
 impl Model {
-    pub fn new() -> Result<Self> {
+    pub fn new(broker: Url) -> Result<Self> {
         let config = Config::load()?;
         Ok(Self {
             highlighter: Highlighter::new(&config)?,
             config,
+            broker,
             clipboard: ClipboardProvider::new().map_err(|e| eyre!("{e}"))?,
+            connected: false,
             shutdown: false,
             counter: 0,
             copy: 0,
@@ -133,17 +138,39 @@ impl Model {
 
     pub fn message(&self, topic: &str) -> Option<Cow<str>> {
         let m = self.messages.get(topic)?;
-        match self.mode() {
-            Mode::Detail { jq, .. } if jq.is_active() => match jq.run(m.data.clone()) {
-                Err(_) => Some(Cow::Borrowed(&m.text)),
-                Ok(xs) => Some(Cow::Owned(
-                    xs.into_iter()
-                        .filter_map(|x| serde_json::to_string_pretty(&x).ok())
-                        .join("\n"),
-                )),
-            },
-            _ => Some(Cow::Borrowed(&m.text)),
+        Some(
+            self._message(m)
+                .map(Cow::Owned)
+                .unwrap_or(Cow::Borrowed(&m.text)),
+        )
+    }
+
+    fn _message(&self, message: &Message) -> Option<String> {
+        let data = message.data.as_ref().ok()?;
+        let (_, _, jq) = self.mode.as_detail()?;
+        if !jq.is_active() {
+            return None;
         }
+        let x = jq
+            .run(data.clone())
+            .ok()?
+            .into_iter()
+            .filter_map(|x| serde_json::to_string_pretty(&x).ok())
+            .join("\n");
+        Some(x)
+    }
+
+    pub fn error(&self, topic: &str) -> Option<&str> {
+        self.messages
+            .get(topic)?
+            .data
+            .as_ref()
+            .err()
+            .map(|e| e.as_str())
+    }
+
+    pub fn broker(&self) -> &Url {
+        &self.broker
     }
 
     pub fn mode(&self) -> &Mode {
@@ -175,11 +202,20 @@ impl Model {
                 let insert = filter.is_some();
                 match event {
                     Event::Update(UpdateEvent::Receive(message)) => {
-                        self.on_message(message);
+                        self.on_message(message.into());
                         Mode::Topics { filter }
                     }
                     Event::Render(RenderEvent::Tick) => {
                         self.copy = self.copy.saturating_sub(1);
+                        Mode::Topics { filter }
+                    }
+
+                    Event::Render(RenderEvent::Connect) => {
+                        self.connected = true;
+                        Mode::Topics { filter }
+                    }
+                    Event::Render(RenderEvent::Disconnect) => {
+                        self.connected = false;
                         Mode::Topics { filter }
                     }
 
@@ -299,16 +335,26 @@ impl Model {
             Mode::Detail { topic, scroll, jq } => match event {
                 // Update
                 Event::Update(UpdateEvent::Receive(message)) => {
-                    self.on_message(message);
+                    self.on_message(message.into());
                     Mode::Detail { topic, scroll, jq }
                 }
                 Event::Render(RenderEvent::Tick) => {
                     self.copy = self.copy.saturating_sub(1);
                     Mode::Detail { topic, scroll, jq }
                 }
+                Event::Render(RenderEvent::Connect) => {
+                    self.connected = true;
+                    Mode::Detail { topic, scroll, jq }
+                }
+                Event::Render(RenderEvent::Disconnect) => {
+                    self.connected = false;
+                    Mode::Detail { topic, scroll, jq }
+                }
 
                 // Filtering
-                Event::Render(RenderEvent::Char(c)) if !jq.is_prompt() && keys.search == c => {
+                Event::Render(RenderEvent::Char(c))
+                    if !jq.is_prompt() && keys.search == c && self.error(&topic).is_none() =>
+                {
                     Mode::Detail {
                         topic,
                         scroll,
@@ -506,7 +552,9 @@ impl Model {
         self.counter += 1;
         self.messages
             .entry(message.topic.as_str().into())
-            .and_modify(|msg| msg.on_receive(&message.data))
+            .and_modify(|msg| {
+                *msg = message.clone();
+            })
             .or_insert(message);
 
         if self.messages.is_empty() {
@@ -548,11 +596,6 @@ impl Topic {
 }
 
 impl Message {
-    fn on_receive(&mut self, value: &Value) {
-        self.data = value.clone();
-        self.last = Instant::now();
-    }
-
     pub(crate) fn freshness(&self, config: &Config) -> Color {
         if self.retain {
             return config.colors.retain;
@@ -568,20 +611,23 @@ impl Message {
     }
 }
 
-impl From<paho_mqtt::Message> for Message {
-    fn from(value: paho_mqtt::Message) -> Self {
-        let message = serde_json::from_slice(value.payload())
-            .context("Message is not proper JSON")
-            .context(value.topic().to_owned())
-            .unwrap();
+impl From<rumqttc::Publish> for Message {
+    fn from(value: rumqttc::Publish) -> Self {
+        let message = serde_json::from_slice::<serde_json::Value>(&value.payload)
+            .wrap_err("Message is not proper JSON");
         Self {
             topic: Topic {
-                name: value.topic().into(),
+                name: value.topic,
                 highlights: Default::default(),
             },
-            text: serde_json::to_string_pretty(&message).unwrap(),
-            data: message,
-            retain: value.retained(),
+            text: message
+                .as_ref()
+                .ok()
+                .and_then(|message| serde_json::to_string_pretty(&message).ok())
+                .or_else(|| String::from_utf8(value.payload.into()).ok())
+                .unwrap_or_default(),
+            data: message.map_err(|e| format!("{e:#}")),
+            retain: value.retain,
             last: Instant::now(),
         }
     }

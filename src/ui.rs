@@ -3,7 +3,7 @@ use itertools::{Itertools, repeat_n};
 use ratatui::{
     layout::Constraint::{Fill, Length},
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarState},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarState, Wrap},
 };
 
 use crate::{
@@ -26,6 +26,14 @@ pub fn render(frame: &mut Frame, model: &Model) {
     }
 }
 
+fn connection_status(model: &Model) -> Paragraph {
+    Paragraph::new("● ").style(Style::new().fg(if model.connected {
+        Color::Green
+    } else {
+        Color::Red
+    }))
+}
+
 fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&Filter>) {
     let [top, overview, prompt] = Layout::vertical([
         Length(1),
@@ -34,8 +42,18 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
     ])
     .areas(area);
 
+    let [counter, host, indicator] = Layout::horizontal([Length(6), Fill(0), Length(6)]).areas(top);
+
     // Top header
-    frame.render_widget(Paragraph::new(format!("Messages: {}", model.counter)), top);
+    frame.render_widget(
+        Paragraph::new(format!("{}", model.counter)).dark_gray(),
+        counter,
+    );
+    frame.render_widget(
+        Paragraph::new(model.broker().to_string()).centered().bold(),
+        host,
+    );
+    frame.render_widget(connection_status(model).right_aligned(), indicator);
 
     // Topic overview
     let list = List::new(model.topics().map(|(topic, message)| {
@@ -53,7 +71,7 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
     }))
     .block(
         Block::new()
-            .title(Line::raw("Topics").centered())
+            .title(Line::raw("Topics").italic().dark_gray())
             .borders(Borders::TOP),
     );
 
@@ -82,23 +100,34 @@ fn render_details(
     jq: &Jaqqer,
     scroll: u16,
 ) {
-    let [header, pane, footer] = Layout::vertical([
+    let message = model.message(topic).unwrap_or_default();
+    let error = model.error(topic);
+
+    let [header, pane, warning, footer] = Layout::vertical([
         Length(2),
         Fill(0),
+        Length(error.map(|e| e.lines().count() + 1).unwrap_or_default() as u16),
         Length(if jq.is_dormant() { 0 } else { 6 }),
     ])
     .areas(area);
+
+    let [header, indicator] = Layout::horizontal([Fill(0), Length(2)]).areas(header);
     let [details, scroller] = Layout::horizontal([Fill(0), Length(1)]).areas(pane);
 
     // Top header with topic name
     frame.render_widget(
-        Paragraph::new(
-            Span::styled(topic, Style::new().fg(Color::Gray))
-                .italic()
-                .into_centered_line(),
-        )
-        .block(Block::new().borders(Borders::BOTTOM)),
+        Paragraph::new(topic).bold().centered().block(
+            Block::new()
+                .title(Line::raw("Message").italic().dark_gray())
+                .borders(Borders::BOTTOM),
+        ),
         header,
+    );
+    frame.render_widget(
+        connection_status(model)
+            .right_aligned()
+            .block(Block::new().borders(Borders::BOTTOM).gray()),
+        indicator,
     );
 
     let mut style = Style::new();
@@ -106,11 +135,29 @@ fn render_details(
         style = style.reversed();
     }
 
-    let message = model.message(topic).unwrap_or_default();
     frame.render_widget(
-        Paragraph::new(model.highlight(&message, details, scroll).style(style)).scroll((scroll, 0)),
+        Paragraph::new(
+            if error.is_none() {
+                model.highlight(&message, details, scroll)
+            } else {
+                message.clone().into()
+            }
+            .style(style),
+        )
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false }),
         details,
     );
+    if let Some(error) = error {
+        frame.render_widget(
+            Paragraph::new(Text::from(error).dark_gray()).block(
+                Block::new()
+                    .title(Line::raw("Warning").italic().yellow())
+                    .borders(Borders::TOP),
+            ),
+            warning,
+        )
+    }
     frame.render_stateful_widget(
         Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
@@ -120,7 +167,6 @@ fn render_details(
             .position(scroll as usize),
     );
 
-    // let jq = jq.render(frame, footer).block();
     let filter = match jq {
         Jaqqer::Dormant => Default::default(),
         Jaqqer::Prompt {

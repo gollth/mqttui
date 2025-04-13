@@ -1,4 +1,14 @@
-# Unreleased
+# CHANGELOG
+
+## Unreleased
+
+* Switch to [rumqttc](https://docs.rs/rumqttc/latest/rumqttc/)
+* Show connection status in header
+* Automatically reconnect if broker restarts
+* `-q/--quit` do immediately disconnect on connection loss
+* Allow non-JSON messages but show warning
+
+## 1.0.0
 
 * Show topics in selectable list
 * Fuzzy search through topics

@@ -26,7 +26,7 @@ use url::Url;
 #[derive(Debug, Parser)]
 struct Args {
     /// The URL of the MQTT broker to connect to
-    #[arg(short('b'), long, default_value = "mqtt://localhost:1883", value_parser = validate_url)]
+    #[arg(default_value = "mqtt://localhost:1883", value_parser = validate_url)]
     broker: Url,
 
     /// Immediately quit, when the connection to the broker is lost
@@ -96,7 +96,7 @@ async fn init(broker: &Url) -> Result<(AsyncClient, EventLoop)> {
         name,
         broker
             .host_str()
-            .ok_or(eyre!("Failed to find out host name from `--broker`"))
+            .ok_or(eyre!("Failed to find out host name from broker URL"))
             .wrap_err(broker.clone())?,
         broker.port_or_known_default().unwrap_or(1883),
     );
@@ -127,9 +127,9 @@ async fn run<B: Backend>(broker: Url, terminal: &mut Terminal<B>, reconnect: boo
 }
 
 fn validate_url(arg: &str) -> Result<Url, url::ParseError> {
-    let url = Url::parse(arg)?;
+    let url = Url::parse(arg).or_else(|_| format!("{arg}:1883").parse())?;
     if url.host().is_none() {
-        return Url::parse(&format!("mqtt://{arg}"));
+        return Url::parse(&format!("mqtt://{arg}")).or_else(|_| format!("{arg}:1883").parse());
     }
     Ok(url)
 }

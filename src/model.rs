@@ -553,7 +553,11 @@ impl Model {
         self.messages
             .entry(message.topic.as_str().into())
             .and_modify(|msg| {
+                let was_retain = msg.retain;
                 *msg = message.clone();
+                if was_retain {
+                    msg.retain = was_retain;
+                }
             })
             .or_insert(message);
 

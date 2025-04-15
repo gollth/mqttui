@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## Unreleased
+
+* Fix bug where color for retained messages is lost
+* Add logging to `~/.cache/mqttui/mqttui.log`
+
 ## 1.1.0
 
 * Switch to [rumqttc](https://docs.rs/rumqttc/latest/rumqttc/)

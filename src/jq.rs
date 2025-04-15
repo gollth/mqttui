@@ -8,6 +8,7 @@ use jaq_core::{
 };
 use jaq_json::Val;
 use serde_json::Value;
+use tracing::info;
 
 #[derive(Debug, Default, Clone, EnumAsInner)]
 pub enum Jaqqer {
@@ -63,11 +64,14 @@ impl Jaqqer {
                 prompt,
                 cursor,
                 errors,
-            } => Self::Active {
-                prompt,
-                cursor,
-                errors,
-            },
+            } => {
+                info!(jq = prompt, "activate");
+                Self::Active {
+                    prompt,
+                    cursor,
+                    errors,
+                }
+            }
             Self::Active {
                 prompt,
                 cursor,

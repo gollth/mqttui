@@ -33,3 +33,5 @@ jaq-json = { version = "1.1.1", features = ["serde_json"] }
 jaq-std = "2.1.0"
 codesnake = "0.2.1"
 rumqttc = "0.24.0"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"

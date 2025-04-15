@@ -92,6 +92,14 @@ impl Config {
         Ok(dir.place_config_file("config.toml")?)
     }
 
+    pub fn log() -> Result<PathBuf> {
+        let name = env!("CARGO_PKG_NAME");
+        let path = xdg::BaseDirectories::with_prefix(name)
+            .context("failed to read XDG config directory")?
+            .place_cache_file(format!("{name}.log"))?;
+        Ok(path)
+    }
+
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
 

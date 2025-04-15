@@ -22,6 +22,7 @@ use ratatui::{
     text::{Line, Span, Text},
 };
 use serde_json::Value;
+use tracing::{Level, instrument};
 use url::Url;
 
 use crate::{
@@ -480,6 +481,7 @@ impl Model {
         };
     }
 
+    #[instrument(skip(self))]
     fn apply_filter(&mut self) {
         match self.mode() {
             Mode::Topics {
@@ -508,6 +510,7 @@ impl Model {
         }
     }
 
+    #[instrument(skip(self))]
     fn clear_filter(&mut self) {
         for m in self.messages.values_mut() {
             m.topic.highlights.clear();
@@ -518,16 +521,19 @@ impl Model {
         filter.take();
     }
 
+    #[instrument(skip(self))]
     fn select_first(&mut self) {
         let next = self.topics().next().map(|(t, _)| t.clone());
         self.selection = next;
     }
 
+    #[instrument(skip(self))]
     fn select_last(&mut self) {
         let last = self.topics().last().map(|(t, _)| t.clone());
         self.selection = last;
     }
 
+    #[instrument(skip(self))]
     fn select_next(&mut self) {
         let next = self
             .topics()
@@ -538,6 +544,7 @@ impl Model {
         self.selection = next;
     }
 
+    #[instrument(skip(self))]
     fn select_previous(&mut self) {
         let previous = self
             .topics()
@@ -548,6 +555,7 @@ impl Model {
         self.selection = previous;
     }
 
+    #[instrument(skip_all, level = Level::DEBUG, fields(topic = message.topic.as_str(),  retain = message.retain))]
     fn on_message(&mut self, message: Message) {
         self.counter += 1;
         self.messages

@@ -11,6 +11,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task;
 use tokio::time::sleep;
+use tracing::error;
 
 const TICK: Duration = Duration::from_millis(100);
 
@@ -72,6 +73,7 @@ pub async fn start(
                         let _ = tx2.send(Event::Render(RenderEvent::Disconnect));
                         break;
                     }
+                    Err(other) => error!("Encountered unknown error: {other:#}"),
                     Ok(rumqttc::Event::Incoming(Incoming::Publish(message))) => {
                         let _ = tx2.send(Event::Update(UpdateEvent::Receive(message)));
                     }

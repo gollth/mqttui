@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## Unreleased
+
+* Make broker URL positional argument
+* Fix bug where color for retained messages is lost
+* Fix bug where `<host>:<port>` was not allowed
+* Add logging to `~/.cache/mqttui/mqttui.log`
+
 ## 1.1.0
 
 * Switch to [rumqttc](https://docs.rs/rumqttc/latest/rumqttc/)

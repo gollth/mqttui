@@ -27,11 +27,13 @@ pub fn render(frame: &mut Frame, model: &Model) {
 }
 
 fn connection_status(model: &Model) -> Paragraph {
-    Paragraph::new("● ").style(Style::new().fg(if model.connected {
-        Color::Green
-    } else {
-        Color::Red
-    }))
+    Paragraph::new("● ")
+        .style(Style::new().fg(if model.connected {
+            Color::Green
+        } else {
+            Color::Red
+        }))
+        .right_aligned()
 }
 
 fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&Filter>) {
@@ -53,7 +55,7 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
         Paragraph::new(model.broker().to_string()).centered().bold(),
         host,
     );
-    frame.render_widget(connection_status(model).right_aligned(), indicator);
+    frame.render_widget(connection_status(model), indicator);
 
     // Topic overview
     let list = List::new(model.topics().map(|(topic, message)| {
@@ -104,7 +106,7 @@ fn render_details(
     let error = model.error(topic);
 
     let [header, pane, warning, footer] = Layout::vertical([
-        Length(2),
+        Length(1),
         Fill(0),
         Length(error.map(|e| e.lines().count() + 1).unwrap_or_default() as u16),
         Length(if jq.is_dormant() { 0 } else { 6 }),
@@ -112,23 +114,11 @@ fn render_details(
     .areas(area);
 
     let [header, indicator] = Layout::horizontal([Fill(0), Length(2)]).areas(header);
-    let [details, scroller] = Layout::horizontal([Fill(0), Length(1)]).areas(pane);
+    let [details, mut scroller] = Layout::horizontal([Fill(0), Length(1)]).areas(pane);
 
     // Top header with topic name
-    frame.render_widget(
-        Paragraph::new(topic).bold().centered().block(
-            Block::new()
-                .title(Line::raw("Message").italic().dark_gray())
-                .borders(Borders::BOTTOM),
-        ),
-        header,
-    );
-    frame.render_widget(
-        connection_status(model)
-            .right_aligned()
-            .block(Block::new().borders(Borders::BOTTOM).gray()),
-        indicator,
-    );
+    frame.render_widget(Paragraph::new(topic).bold().centered(), header);
+    frame.render_widget(connection_status(model), indicator);
 
     let mut style = Style::new();
     if model.is_copy() {
@@ -144,6 +134,11 @@ fn render_details(
             }
             .style(style),
         )
+        .block(
+            Block::new()
+                .title(Line::raw("Message").italic().dark_gray())
+                .borders(Borders::TOP),
+        )
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false }),
         details,
@@ -158,6 +153,8 @@ fn render_details(
             warning,
         )
     }
+    scroller.y += 1;
+    scroller.height -= 1;
     frame.render_stateful_widget(
         Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)

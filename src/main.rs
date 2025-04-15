@@ -127,5 +127,9 @@ async fn run<B: Backend>(broker: Url, terminal: &mut Terminal<B>, reconnect: boo
 }
 
 fn validate_url(arg: &str) -> Result<Url, url::ParseError> {
-    Url::parse(arg).or_else(|_| format!("{arg}:1883").parse())
+    let url = Url::parse(arg)?;
+    if url.host().is_none() {
+        return Url::parse(&format!("mqtt://{arg}"));
+    }
+    Ok(url)
 }

@@ -3,6 +3,7 @@
 ## Unreleased
 
 * Fix bug where color for retained messages is lost
+* Fix bug where `<host>:<port>` was not allowed
 * Add logging to `~/.cache/mqttui/mqttui.log`
 
 ## 1.1.0

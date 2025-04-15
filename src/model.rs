@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     cmp::Reverse,
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashSet, VecDeque},
     ops::Deref,
     rc::Rc,
     time::Instant,
@@ -43,11 +43,17 @@ pub struct Model {
     broker: Url,
 
     mode: Mode,
-    messages: BTreeMap<String, Message>,
+    messages: BTreeMap<String, Messages>,
     selection: Option<String>,
 
     clipboard: ClipboardContext,
     copy: usize,
+}
+
+pub struct Messages {
+    topic: Topic,
+    latest: Message,
+    queue: VecDeque<Message>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -72,6 +78,7 @@ pub enum Mode {
     },
     Detail {
         topic: String,
+        index: Option<usize>,
         scroll: u16,
         jq: Jaqqer,
     },
@@ -134,11 +141,11 @@ impl Model {
                 Some((score, topic, message))
             })
             .sorted_by_key(|(score, _, _)| Reverse(*score))
-            .map(|(_, topic, message)| (topic, message))
+            .map(|(_, topic, m)| (topic, &m.latest))
     }
 
-    pub fn message(&self, topic: &str) -> Option<Cow<str>> {
-        let m = self.messages.get(topic)?;
+    pub fn message(&self, topic: &str, index: Option<usize>) -> Option<Cow<str>> {
+        let m = self.messages.get(topic)?.get(index)?;
         Some(
             self._message(m)
                 .map(Cow::Owned)
@@ -146,9 +153,16 @@ impl Model {
         )
     }
 
+    pub fn message_count(&self, topic: &str) -> usize {
+        self.messages
+            .get(topic)
+            .map(|m| m.len())
+            .unwrap_or_default()
+    }
+
     fn _message(&self, message: &Message) -> Option<String> {
         let data = message.data.as_ref().ok()?;
-        let (_, _, jq) = self.mode.as_detail()?;
+        let (.., jq) = self.mode.as_detail()?;
         if !jq.is_active() {
             return None;
         }
@@ -161,9 +175,10 @@ impl Model {
         Some(x)
     }
 
-    pub fn error(&self, topic: &str) -> Option<&str> {
+    pub fn error(&self, topic: &str, index: Option<usize>) -> Option<&str> {
         self.messages
             .get(topic)?
+            .get(index)?
             .data
             .as_ref()
             .err()
@@ -237,6 +252,7 @@ impl Model {
                             topic: topic.into(),
                             jq: Jaqqer::default(),
                             scroll: 0,
+                            index: None,
                         },
                     },
                     Event::Render(RenderEvent::Back) => {
@@ -333,44 +349,74 @@ impl Model {
                     Event::Render(RenderEvent::Home | RenderEvent::End) => Mode::Topics { filter },
                 }
             }
-            Mode::Detail { topic, scroll, jq } => match event {
+            Mode::Detail {
+                topic,
+                scroll,
+                index,
+                jq,
+            } => match event {
                 // Update
                 Event::Update(UpdateEvent::Receive(message)) => {
                     self.on_message(message.into());
-                    Mode::Detail { topic, scroll, jq }
+                    Mode::Detail {
+                        topic,
+                        scroll,
+                        index,
+                        jq,
+                    }
                 }
                 Event::Render(RenderEvent::Tick) => {
                     self.copy = self.copy.saturating_sub(1);
-                    Mode::Detail { topic, scroll, jq }
+                    Mode::Detail {
+                        topic,
+                        scroll,
+                        index,
+                        jq,
+                    }
                 }
                 Event::Render(RenderEvent::Connect) => {
                     self.connected = true;
-                    Mode::Detail { topic, scroll, jq }
+                    Mode::Detail {
+                        topic,
+                        scroll,
+                        index,
+                        jq,
+                    }
                 }
                 Event::Render(RenderEvent::Disconnect) => {
                     self.connected = false;
-                    Mode::Detail { topic, scroll, jq }
+                    Mode::Detail {
+                        topic,
+                        scroll,
+                        index,
+                        jq,
+                    }
                 }
 
                 // Filtering
                 Event::Render(RenderEvent::Char(c))
-                    if !jq.is_prompt() && keys.search == c && self.error(&topic).is_none() =>
+                    if !jq.is_prompt()
+                        && keys.search == c
+                        && self.error(&topic, index).is_none() =>
                 {
                     Mode::Detail {
                         topic,
                         scroll,
+                        index,
                         jq: jq.edit(),
                     }
                 }
                 Event::Render(RenderEvent::Back) if !jq.is_dormant() => Mode::Detail {
                     topic,
                     scroll,
+                    index,
                     jq: jq.clear(),
                 },
                 Event::Render(RenderEvent::Select) if jq.is_prompt() && jq.errors().is_empty() => {
                     Mode::Detail {
                         topic,
                         scroll,
+                        index,
                         jq: jq.activate(),
                     }
                 }
@@ -378,12 +424,30 @@ impl Model {
                 // Quit
                 Event::Render(RenderEvent::Quit) => {
                     self.shutdown = true;
-                    Mode::Detail { topic, scroll, jq }
+                    Mode::Detail {
+                        topic,
+                        scroll,
+                        index,
+                        jq,
+                    }
                 }
                 Event::Render(RenderEvent::Char('q')) if !jq.is_prompt() => {
                     self.shutdown = true;
-                    Mode::Detail { topic, scroll, jq }
+                    Mode::Detail {
+                        topic,
+                        scroll,
+                        index,
+                        jq,
+                    }
                 }
+
+                // Clear any history offset
+                Event::Render(RenderEvent::Back) if index.is_some() => Mode::Detail {
+                    topic,
+                    scroll,
+                    index: None,
+                    jq,
+                },
 
                 // Back to topics overview
                 Event::Render(RenderEvent::Back) => {
@@ -393,68 +457,119 @@ impl Model {
 
                 // Copy
                 Event::Render(RenderEvent::Char(c)) if !jq.is_prompt() && keys.copy == c => {
-                    if let Some(msg) = self.message(&topic) {
+                    if let Some(msg) = self.message(&topic, index) {
                         let _ = self.clipboard.set_contents(msg.into());
                         self.copy += 2;
                     }
-                    Mode::Detail { topic, scroll, jq }
+                    Mode::Detail {
+                        topic,
+                        scroll,
+                        index,
+                        jq,
+                    }
                 }
 
                 // Navigation
                 Event::Render(RenderEvent::Up) => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_sub(1),
+                    index,
                     jq,
                 },
                 Event::Render(RenderEvent::Char('k')) if !jq.is_prompt() => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_sub(1),
+                    index,
                     jq,
                 },
 
                 Event::Render(RenderEvent::Down) => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_add(1),
+                    index,
                     jq,
                 },
                 Event::Render(RenderEvent::Char('j')) if !jq.is_prompt() => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_add(1),
+                    index,
+                    jq,
+                },
+                Event::Render(RenderEvent::Char('h')) if !jq.is_prompt() => Mode::Detail {
+                    scroll,
+                    index: Some(
+                        index
+                            .unwrap_or_else(|| self.message_count(&topic))
+                            .saturating_sub(1),
+                    ),
+                    topic,
+                    jq,
+                },
+                Event::Render(RenderEvent::Char('l')) if !jq.is_prompt() => Mode::Detail {
+                    index: index
+                        .map(|i| i + 1)
+                        .filter(|i| *i < self.message_count(&topic)),
+                    topic,
+                    scroll,
+                    jq,
+                },
+                Event::Render(RenderEvent::Left) if !jq.is_prompt() => Mode::Detail {
+                    index: index
+                        .map(|i| i + 1)
+                        .filter(|i| *i < self.message_count(&topic)),
+                    topic,
+                    scroll,
+                    jq,
+                },
+                Event::Render(RenderEvent::Right) if !jq.is_prompt() => Mode::Detail {
+                    scroll,
+                    index: Some(
+                        index
+                            .unwrap_or_else(|| self.message_count(&topic))
+                            .saturating_sub(1),
+                    ),
+                    topic,
                     jq,
                 },
                 Event::Render(RenderEvent::Left) => Mode::Detail {
                     topic,
                     scroll,
+                    index,
                     jq: jq.move_cursor(-1),
                 },
                 Event::Render(RenderEvent::Right) => Mode::Detail {
                     topic,
                     scroll,
+                    index,
                     jq: jq.move_cursor(1),
                 },
                 Event::Render(RenderEvent::Home) if jq.is_prompt() => Mode::Detail {
                     topic,
                     scroll,
+                    index,
                     jq: jq.move_cursor(-100),
                 },
                 Event::Render(RenderEvent::End) if jq.is_prompt() => Mode::Detail {
                     topic,
                     scroll,
+                    index,
                     jq: jq.move_cursor(100),
                 },
                 Event::Render(RenderEvent::Home) => Mode::Detail {
                     topic,
                     scroll: 0,
+                    index,
                     jq,
                 },
                 Event::Render(RenderEvent::End) => Mode::Detail {
                     scroll: self
-                        .message(&topic)
+                        .message(&topic, index)
                         .unwrap_or_default()
                         .lines()
                         .count()
                         .saturating_sub(SCROLL_BOTTOM_OFFSET) as u16,
                     topic,
+                    index,
                     jq,
                 },
 
@@ -462,21 +577,29 @@ impl Model {
                 Event::Render(RenderEvent::Char(c)) => Mode::Detail {
                     topic,
                     scroll,
+                    index,
                     jq: jq.input(c),
                 },
                 Event::Render(RenderEvent::Backspace) => Mode::Detail {
                     topic,
                     scroll,
+                    index,
                     jq: jq.backspace(),
                 },
                 Event::Render(RenderEvent::Delete) => Mode::Detail {
                     topic,
                     scroll,
+                    index,
                     jq: jq.delete(),
                 },
 
                 // Enter on no prompt, just stay
-                Event::Render(RenderEvent::Select) => Mode::Detail { topic, scroll, jq },
+                Event::Render(RenderEvent::Select) => Mode::Detail {
+                    topic,
+                    scroll,
+                    index,
+                    jq,
+                },
             },
         };
     }
@@ -560,14 +683,8 @@ impl Model {
         self.counter += 1;
         self.messages
             .entry(message.topic.as_str().into())
-            .and_modify(|msg| {
-                let was_retain = msg.retain;
-                *msg = message.clone();
-                if was_retain {
-                    msg.retain = was_retain;
-                }
-            })
-            .or_insert(message);
+            .and_modify(|m| m.update(message.clone()))
+            .or_insert(message.into());
 
         if self.messages.is_empty() {
             self.selection = None;
@@ -604,6 +721,38 @@ impl Topic {
                 )
             })
             .collect()
+    }
+}
+
+impl Messages {
+    fn len(&self) -> usize {
+        self.queue.len() + 1
+    }
+
+    fn update(&mut self, mut message: Message) {
+        let was_retain = self.latest.retain;
+        if was_retain {
+            message.retain = was_retain;
+        }
+        self.queue.push_back(message);
+        std::mem::swap(self.queue.back_mut().unwrap(), &mut self.latest);
+    }
+
+    fn get(&self, index: Option<usize>) -> Option<&Message> {
+        if index.is_none() || index == Some(self.queue.len()) {
+            return Some(&self.latest);
+        }
+        self.queue.get(index?)
+    }
+}
+
+impl From<Message> for Messages {
+    fn from(value: Message) -> Self {
+        Self {
+            topic: value.topic.clone(),
+            latest: value,
+            queue: Default::default(),
+        }
     }
 }
 

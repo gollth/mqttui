@@ -3,7 +3,10 @@ use itertools::{Itertools, repeat_n};
 use ratatui::{
     layout::Constraint::{Fill, Length},
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarState, Wrap},
+    widgets::{
+        Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Wrap,
+    },
 };
 
 use crate::{
@@ -20,9 +23,12 @@ pub fn render(frame: &mut Frame, model: &Model) {
     frame.render_widget(border, frame.area());
     match model.mode() {
         Mode::Topics { filter } => render_topics(frame, area, model, filter.as_ref()),
-        Mode::Detail { topic, scroll, jq } => {
-            render_details(frame, area, model, topic, jq, *scroll)
-        }
+        Mode::Detail {
+            topic,
+            scroll,
+            index,
+            jq,
+        } => render_details(frame, area, model, topic, jq, *scroll, *index),
     }
 }
 
@@ -101,9 +107,10 @@ fn render_details(
     topic: &str,
     jq: &Jaqqer,
     scroll: u16,
+    index: Option<usize>,
 ) {
-    let message = model.message(topic).unwrap_or_default();
-    let error = model.error(topic);
+    let message = model.message(topic, index).unwrap_or_default();
+    let error = model.error(topic, index);
 
     let [header, pane, warning, footer] = Layout::vertical([
         Length(1),
@@ -125,6 +132,7 @@ fn render_details(
         style = style.reversed();
     }
 
+    let count = model.message_count(topic) + 1;
     frame.render_widget(
         Paragraph::new(
             if error.is_none() {
@@ -137,6 +145,16 @@ fn render_details(
         .block(
             Block::new()
                 .title(Line::raw("Message").italic().dark_gray())
+                .title(
+                    Line::raw(
+                        index
+                            .map(|i| format!("(message {} of {count})", i + 1))
+                            .unwrap_or("(latest)".into()),
+                    )
+                    .centered()
+                    .italic()
+                    .dark_gray(),
+                )
                 .borders(Borders::TOP),
         )
         .scroll((scroll, 0))
@@ -156,7 +174,7 @@ fn render_details(
     scroller.y += 1;
     scroller.height -= 1;
     frame.render_stateful_widget(
-        Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None),
         scroller,

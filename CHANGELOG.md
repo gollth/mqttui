@@ -7,6 +7,7 @@
 * Fix bug where `<host>:<port>` was not allowed
 * Add logging to `~/.cache/mqttui/mqttui.log`
 * Add message history
+* Allow scrolling with '{' & '}' like in VIM
 
 ## 1.1.0
 

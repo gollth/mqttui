@@ -286,6 +286,10 @@ impl Model {
                         self.select_last();
                         Mode::Topics { filter }
                     }
+                    Event::Render(RenderEvent::ScrollDown | RenderEvent::ScrollUp) => {
+                        /* not yet supported */
+                        Mode::Topics { filter }
+                    }
 
                     Event::Render(RenderEvent::Backspace) if insert => {
                         if let Some(filter) = filter.as_mut() {
@@ -470,6 +474,7 @@ impl Model {
                 }
 
                 // Navigation
+                // up
                 Event::Render(RenderEvent::Up) => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_sub(1),
@@ -482,7 +487,20 @@ impl Model {
                     index,
                     jq,
                 },
+                Event::Render(RenderEvent::ScrollUp) => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_sub(self.config().topics.lines_to_scroll),
+                    index,
+                    jq,
+                },
+                Event::Render(RenderEvent::Char('{')) if !jq.is_prompt() => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_sub(self.config().topics.lines_to_scroll),
+                    index,
+                    jq,
+                },
 
+                // down
                 Event::Render(RenderEvent::Down) => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_add(1),
@@ -495,6 +513,19 @@ impl Model {
                     index,
                     jq,
                 },
+                Event::Render(RenderEvent::ScrollDown) => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_add(self.config().topics.lines_to_scroll),
+                    index,
+                    jq,
+                },
+                Event::Render(RenderEvent::Char('}')) if !jq.is_prompt() => Mode::Detail {
+                    topic,
+                    scroll: scroll.saturating_add(self.config().topics.lines_to_scroll),
+                    index,
+                    jq,
+                },
+
                 Event::Render(RenderEvent::Char('l')) if !jq.is_prompt() => Mode::Detail {
                     scroll,
                     index: Some(

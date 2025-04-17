@@ -495,7 +495,7 @@ impl Model {
                     index,
                     jq,
                 },
-                Event::Render(RenderEvent::Char('h')) if !jq.is_prompt() => Mode::Detail {
+                Event::Render(RenderEvent::Char('l')) if !jq.is_prompt() => Mode::Detail {
                     scroll,
                     index: Some(
                         index
@@ -505,15 +505,7 @@ impl Model {
                     topic,
                     jq,
                 },
-                Event::Render(RenderEvent::Char('l')) if !jq.is_prompt() => Mode::Detail {
-                    index: index
-                        .map(|i| i + 1)
-                        .filter(|i| *i < self.message_count(&topic)),
-                    topic,
-                    scroll,
-                    jq,
-                },
-                Event::Render(RenderEvent::Left) if !jq.is_prompt() => Mode::Detail {
+                Event::Render(RenderEvent::Char('h')) if !jq.is_prompt() => Mode::Detail {
                     index: index
                         .map(|i| i + 1)
                         .filter(|i| *i < self.message_count(&topic)),
@@ -522,6 +514,14 @@ impl Model {
                     jq,
                 },
                 Event::Render(RenderEvent::Right) if !jq.is_prompt() => Mode::Detail {
+                    index: index
+                        .map(|i| i + 1)
+                        .filter(|i| *i < self.message_count(&topic)),
+                    topic,
+                    scroll,
+                    jq,
+                },
+                Event::Render(RenderEvent::Left) if !jq.is_prompt() => Mode::Detail {
                     scroll,
                     index: Some(
                         index
@@ -683,7 +683,7 @@ impl Model {
         self.counter += 1;
         self.messages
             .entry(message.topic.as_str().into())
-            .and_modify(|m| m.update(message.clone()))
+            .and_modify(|m| m.update(message.clone(), &self.config))
             .or_insert(message.into());
 
         if self.messages.is_empty() {
@@ -729,13 +729,17 @@ impl Messages {
         self.queue.len() + 1
     }
 
-    fn update(&mut self, mut message: Message) {
+    fn update(&mut self, mut message: Message, config: &Config) {
         let was_retain = self.latest.retain;
         if was_retain {
             message.retain = was_retain;
         }
         self.queue.push_back(message);
         std::mem::swap(self.queue.back_mut().unwrap(), &mut self.latest);
+
+        if config.topics.buffer_size > 0 && self.len() >= config.topics.buffer_size {
+            self.queue.pop_front();
+        }
     }
 
     fn get(&self, index: Option<usize>) -> Option<&Message> {

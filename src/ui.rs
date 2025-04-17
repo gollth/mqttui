@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 use crate::{
+    crumbs::Crumbs,
     jq::Jaqqer,
     model::{Filter, Mode, Model},
 };
@@ -112,9 +113,10 @@ fn render_details(
     let message = model.message(topic, index).unwrap_or_default();
     let error = model.error(topic, index);
 
-    let [header, pane, warning, footer] = Layout::vertical([
+    let [header, pane, crumbs, warning, footer] = Layout::vertical([
         Length(1),
         Fill(0),
+        Length(2),
         Length(error.map(|e| e.lines().count() + 1).unwrap_or_default() as u16),
         Length(if jq.is_dormant() { 0 } else { 6 }),
     ])
@@ -131,8 +133,6 @@ fn render_details(
     if model.is_copy() {
         style = style.reversed();
     }
-
-    let count = model.message_count(topic) + 1;
     frame.render_widget(
         Paragraph::new(
             if error.is_none() {
@@ -142,24 +142,20 @@ fn render_details(
             }
             .style(style),
         )
-        .block(
-            Block::new()
-                .title(Line::raw("Message").italic().dark_gray())
-                .title(
-                    Line::raw(
-                        index
-                            .map(|i| format!("(message {} of {count})", i + 1))
-                            .unwrap_or("(latest)".into()),
-                    )
-                    .centered()
-                    .italic()
-                    .dark_gray(),
-                )
-                .borders(Borders::TOP),
-        )
+        .block(Block::new().title("Message").borders(Borders::TOP))
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false }),
         details,
+    );
+
+    let count = model.message_count(topic) + 1;
+    frame.render_widget(
+        Crumbs::new(index, count).block(
+            Block::new()
+                .title(Line::raw("History").italic().dark_gray())
+                .borders(Borders::TOP),
+        ),
+        crumbs,
     );
     if let Some(error) = error {
         frame.render_widget(

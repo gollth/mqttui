@@ -20,6 +20,10 @@ pub struct Config {
 #[derive(Clone, Debug, Serialize, Deserialize, Derivative)]
 #[derivative(Default)]
 pub struct TopicsConfig {
+    /// How many message to keep for each topic. 0 for all
+    #[serde(default)]
+    pub buffer_size: usize,
+
     /// Until which time since last receptions topics are considered "fresh"
     #[serde(default = "defaults::topics::fresh_until", with = "humantime_serde")]
     #[derivative(Default(value = "defaults::topics::fresh_until()"))]

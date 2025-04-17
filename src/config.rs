@@ -20,6 +20,10 @@ pub struct Config {
 #[derive(Clone, Debug, Serialize, Deserialize, Derivative)]
 #[derivative(Default)]
 pub struct TopicsConfig {
+    /// How many message to keep for each topic. 0 for all
+    #[serde(default)]
+    pub buffer_size: usize,
+
     /// Until which time since last receptions topics are considered "fresh"
     #[serde(default = "defaults::topics::fresh_until", with = "humantime_serde")]
     #[derivative(Default(value = "defaults::topics::fresh_until()"))]
@@ -29,6 +33,11 @@ pub struct TopicsConfig {
     #[serde(default = "defaults::topics::stale_after", with = "humantime_serde")]
     #[derivative(Default(value = "defaults::topics::stale_after()"))]
     pub stale_after: Duration,
+
+    /// How many lines to scroll when pressing Page Up/Down or '{'/'}'
+    #[serde(default = "defaults::topics::lines_to_scroll")]
+    #[derivative(Default(value = "defaults::topics::lines_to_scroll()"))]
+    pub lines_to_scroll: u16,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Derivative)]
@@ -131,6 +140,9 @@ pub(crate) mod defaults {
 
         pub(crate) fn stale_after() -> Duration {
             Duration::from_secs(5)
+        }
+        pub(crate) fn lines_to_scroll() -> u16 {
+            16
         }
     }
 

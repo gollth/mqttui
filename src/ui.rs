@@ -3,10 +3,14 @@ use itertools::{Itertools, repeat_n};
 use ratatui::{
     layout::Constraint::{Fill, Length},
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarState, Wrap},
+    widgets::{
+        Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Wrap,
+    },
 };
 
 use crate::{
+    crumbs::Crumbs,
     jq::Jaqqer,
     model::{Filter, Mode, Model},
 };
@@ -20,9 +24,12 @@ pub fn render(frame: &mut Frame, model: &Model) {
     frame.render_widget(border, frame.area());
     match model.mode() {
         Mode::Topics { filter } => render_topics(frame, area, model, filter.as_ref()),
-        Mode::Detail { topic, scroll, jq } => {
-            render_details(frame, area, model, topic, jq, *scroll)
-        }
+        Mode::Detail {
+            topic,
+            scroll,
+            index,
+            jq,
+        } => render_details(frame, area, model, topic, jq, *scroll, *index),
     }
 }
 
@@ -101,13 +108,15 @@ fn render_details(
     topic: &str,
     jq: &Jaqqer,
     scroll: u16,
+    index: Option<usize>,
 ) {
-    let message = model.message(topic).unwrap_or_default();
-    let error = model.error(topic);
+    let message = model.message(topic, index).unwrap_or_default();
+    let error = model.error(topic, index);
 
-    let [header, pane, warning, footer] = Layout::vertical([
+    let [header, pane, crumbs, warning, footer] = Layout::vertical([
         Length(1),
         Fill(0),
+        Length(2),
         Length(error.map(|e| e.lines().count() + 1).unwrap_or_default() as u16),
         Length(if jq.is_dormant() { 0 } else { 6 }),
     ])
@@ -120,11 +129,15 @@ fn render_details(
     frame.render_widget(Paragraph::new(topic).bold().centered(), header);
     frame.render_widget(connection_status(model), indicator);
 
+    // in case of error we wrap the message so we always show a scrollbar since we don't know
+    // how many lines will end up in the text box
+    let scrollable = message.lines().count() as u16 > details.height || error.is_some();
+    let scroll = if scrollable { scroll } else { 0 };
+
     let mut style = Style::new();
     if model.is_copy() {
         style = style.reversed();
     }
-
     frame.render_widget(
         Paragraph::new(
             if error.is_none() {
@@ -134,14 +147,20 @@ fn render_details(
             }
             .style(style),
         )
-        .block(
-            Block::new()
-                .title(Line::raw("Message").italic().dark_gray())
-                .borders(Borders::TOP),
-        )
+        .block(Block::new().title("Message").borders(Borders::TOP))
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false }),
         details,
+    );
+
+    let count = model.message_count(topic) + 1;
+    frame.render_widget(
+        Crumbs::new(index, count).block(
+            Block::new()
+                .title(Line::raw("History").italic().dark_gray())
+                .borders(Borders::TOP),
+        ),
+        crumbs,
     );
     if let Some(error) = error {
         frame.render_widget(
@@ -153,17 +172,19 @@ fn render_details(
             warning,
         )
     }
-    scroller.y += 1;
-    scroller.height -= 1;
-    frame.render_stateful_widget(
-        Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .end_symbol(None),
-        scroller,
-        &mut ScrollbarState::new(message.lines().count().saturating_sub(SCROLL_BOTTOM_OFFSET))
-            .position(scroll as usize),
-    );
 
+    if scrollable {
+        scroller.y += 1;
+        scroller.height -= 1;
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None),
+            scroller,
+            &mut ScrollbarState::new(message.lines().count().saturating_sub(SCROLL_BOTTOM_OFFSET))
+                .position(scroll as usize),
+        );
+    }
     let filter = match jq {
         Jaqqer::Dormant => Default::default(),
         Jaqqer::Prompt {

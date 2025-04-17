@@ -129,6 +129,11 @@ fn render_details(
     frame.render_widget(Paragraph::new(topic).bold().centered(), header);
     frame.render_widget(connection_status(model), indicator);
 
+    // in case of error we wrap the message so we always show a scrollbar since we don't know
+    // how many lines will end up in the text box
+    let scrollable = message.lines().count() as u16 > details.height || error.is_some();
+    let scroll = if scrollable { scroll } else { 0 };
+
     let mut style = Style::new();
     if model.is_copy() {
         style = style.reversed();
@@ -167,17 +172,19 @@ fn render_details(
             warning,
         )
     }
-    scroller.y += 1;
-    scroller.height -= 1;
-    frame.render_stateful_widget(
-        Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .end_symbol(None),
-        scroller,
-        &mut ScrollbarState::new(message.lines().count().saturating_sub(SCROLL_BOTTOM_OFFSET))
-            .position(scroll as usize),
-    );
 
+    if scrollable {
+        scroller.y += 1;
+        scroller.height -= 1;
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None),
+            scroller,
+            &mut ScrollbarState::new(message.lines().count().saturating_sub(SCROLL_BOTTOM_OFFSET))
+                .position(scroll as usize),
+        );
+    }
     let filter = match jq {
         Jaqqer::Dormant => Default::default(),
         Jaqqer::Prompt {

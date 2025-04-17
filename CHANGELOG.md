@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## 1.2.0
 
 * Make broker URL positional argument
 * Fix bug where color for retained messages is lost

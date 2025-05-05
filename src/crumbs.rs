@@ -51,7 +51,7 @@ impl Widget for Crumbs<'_> {
             let (symbol, color) = match offset.abs() {
                 0 => ("●", Color::White),
                 1 => ("•", Color::Gray),
-                2..4 => ("·", Color::DarkGray),
+                2.. => ("·", Color::DarkGray),
                 _ => ("", Color::White),
             };
             buffer.set_string(inner.x + x, inner.y, symbol, color);

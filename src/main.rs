@@ -100,7 +100,7 @@ async fn init(broker: &Url) -> Result<(AsyncClient, EventLoop)> {
             .wrap_err(broker.clone())?,
         broker.port_or_known_default().unwrap_or(1883),
     );
-    options.set_max_packet_size(1000000, 1024);
+    options.set_max_packet_size(10_000_000, 1024);
     let (client, eventloop) = AsyncClient::new(options, 10);
     Ok((client, eventloop))
 }

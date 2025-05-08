@@ -130,9 +130,10 @@ impl Jaqqer {
     }
 
     pub(crate) fn input(mut self, c: char, history: &mut History) -> Self {
-        if let Some((prompt, cursor, ..)) = self.as_prompt_mut() {
+        if let Some((prompt, cursor, index, ..)) = self.as_prompt_mut() {
             prompt.insert(*cursor as usize, c);
             history.stage(prompt);
+            *index = 0;
             *cursor += 1;
         }
         self.update_errors()
@@ -177,7 +178,7 @@ impl Jaqqer {
         match self.into_prompt() {
             Err(original) => original,
             Ok((prompt, cursor, index, errors)) => {
-                let new_index = index.saturating_sub(1);
+                let new_index = index.saturating_sub(1).min(history.len());
                 history
                     .lookup(new_index)
                     .map(|prompt| {
@@ -199,10 +200,13 @@ impl Jaqqer {
         }
     }
 
-    pub(crate) fn backspace(mut self) -> Self {
-        if let Some((prompt, cursor, ..)) = self.as_prompt_mut() {
+    pub(crate) fn backspace(mut self, history: &mut History) -> Self {
+        if let Some((prompt, cursor, index, ..)) = self.as_prompt_mut() {
             if !prompt.is_empty() && *cursor > 0 {
                 prompt.remove(*cursor as usize - 1);
+                history.stage(prompt);
+                *index = 0;
+
                 *cursor -= 1;
             }
         }
@@ -214,11 +218,13 @@ impl Jaqqer {
         self
     }
 
-    pub(crate) fn delete(mut self) -> Self {
-        if let Some((prompt, cursor, ..)) = self.as_prompt_mut() {
+    pub(crate) fn delete(mut self, history: &mut History) -> Self {
+        if let Some((prompt, cursor, index, ..)) = self.as_prompt_mut() {
             let c = *cursor as usize;
             if !prompt.is_empty() && c < prompt.chars().count() {
                 prompt.remove(c);
+                history.stage(prompt);
+                *index = 0;
             }
         }
         self
@@ -314,7 +320,7 @@ impl History {
         }
         let commit = self.staging.clone();
         info!(commit = commit, "History::commit");
-        let new_value = self.commited.insert(commit.clone());
+        let new_value = self.commited.shift_insert(0, commit.clone());
         if !new_value {
             return;
         }
@@ -331,12 +337,19 @@ impl History {
         }
     }
 
+    fn iter(&self) -> impl Iterator<Item = &str> {
+        self.commited
+            .iter()
+            .filter(|c| c.starts_with(&self.staging))
+            .map(|s| s.as_str())
+    }
+
     fn is_empty(&self) -> bool {
-        self.commited.is_empty()
+        self.len() == 0
     }
 
     fn len(&self) -> usize {
-        self.commited.len()
+        self.iter().count()
     }
 
     /// Lookup from bottom of history
@@ -349,7 +362,7 @@ impl History {
             return Some(self.staging.clone());
         }
 
-        let commit = self.commited.iter().nth(index - 1)?;
+        let commit = self.iter().nth(index - 1)?;
         info!(index = index, prompt = commit, "History::lookup");
         Some(commit.into())
     }

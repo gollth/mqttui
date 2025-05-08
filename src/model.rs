@@ -629,13 +629,13 @@ impl Model {
                     topic,
                     scroll,
                     index,
-                    jq: jq.backspace(),
+                    jq: jq.backspace(&mut self.history),
                 },
                 Event::Render(RenderEvent::Delete) => Mode::Detail {
                     topic,
                     scroll,
                     index,
-                    jq: jq.delete(),
+                    jq: jq.delete(&mut self.history),
                 },
 
                 // Enter on no prompt, just stay

@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## Unreleased
+
+* Add JQ history with '<UP>'/'<DOWN>'
+
 ## 1.2.0
 
 * Make broker URL positional argument

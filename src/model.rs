@@ -29,7 +29,7 @@ use crate::{
     config::Config,
     events::{Event, RenderEvent, UpdateEvent},
     highlight::Highlighter,
-    jq::Jaqqer,
+    jq::{History, Jaqqer},
     ui::SCROLL_BOTTOM_OFFSET,
 };
 
@@ -48,6 +48,7 @@ pub struct Model {
 
     clipboard: ClipboardContext,
     copy: usize,
+    history: History,
 }
 
 pub struct Messages {
@@ -111,6 +112,7 @@ impl Model {
             shutdown: false,
             counter: 0,
             copy: 0,
+            history: History::load()?,
             messages: Default::default(),
             selection: None,
             mode: Mode::Topics {
@@ -407,7 +409,7 @@ impl Model {
                         topic,
                         scroll,
                         index,
-                        jq: jq.edit(),
+                        jq: jq.edit(&mut self.history),
                     }
                 }
                 Event::Render(RenderEvent::Back) if !jq.is_dormant() => Mode::Detail {
@@ -421,7 +423,7 @@ impl Model {
                         topic,
                         scroll,
                         index,
-                        jq: jq.activate(),
+                        jq: jq.activate(&mut self.history),
                     }
                 }
 
@@ -475,11 +477,17 @@ impl Model {
 
                 // Navigation
                 // up
-                Event::Render(RenderEvent::Up) => Mode::Detail {
+                Event::Render(RenderEvent::Up) if !jq.is_prompt() => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_sub(1),
                     index,
                     jq,
+                },
+                Event::Render(RenderEvent::Up) => Mode::Detail {
+                    topic,
+                    scroll,
+                    index,
+                    jq: jq.up(&self.history),
                 },
                 Event::Render(RenderEvent::Char('k')) if !jq.is_prompt() => Mode::Detail {
                     topic,
@@ -501,11 +509,17 @@ impl Model {
                 },
 
                 // down
-                Event::Render(RenderEvent::Down) => Mode::Detail {
+                Event::Render(RenderEvent::Down) if !jq.is_prompt() => Mode::Detail {
                     topic,
                     scroll: scroll.saturating_add(1),
                     index,
                     jq,
+                },
+                Event::Render(RenderEvent::Down) => Mode::Detail {
+                    topic,
+                    scroll,
+                    index,
+                    jq: jq.down(&self.history),
                 },
                 Event::Render(RenderEvent::Char('j')) if !jq.is_prompt() => Mode::Detail {
                     topic,
@@ -609,7 +623,7 @@ impl Model {
                     topic,
                     scroll,
                     index,
-                    jq: jq.input(c),
+                    jq: jq.input(c, &mut self.history),
                 },
                 Event::Render(RenderEvent::Backspace) => Mode::Detail {
                     topic,

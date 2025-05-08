@@ -191,6 +191,7 @@ fn render_details(
             prompt,
             cursor,
             errors,
+            ..
         } => {
             let mut input = format!("{PROMPT}{prompt}");
             let x = ((input.chars().count() - prompt.chars().count()) as u16 + cursor)

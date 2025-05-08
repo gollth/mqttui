@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Duration};
+use std::{fs::File, path::PathBuf, time::Duration};
 
 use color_eyre::{Result, eyre::Context};
 use derivative::Derivative;
@@ -106,6 +106,18 @@ impl Config {
         let path = xdg::BaseDirectories::with_prefix(name)
             .context("failed to read XDG config directory")?
             .place_cache_file(format!("{name}.log"))?;
+        Ok(path)
+    }
+
+    pub fn history() -> Result<PathBuf> {
+        let name = env!("CARGO_PKG_NAME");
+        let path = xdg::BaseDirectories::with_prefix(name)
+            .context("failed to read XDG config directory")?
+            .place_cache_file("history.jq")?;
+
+        if !path.exists() {
+            File::create(&path)?;
+        }
         Ok(path)
     }
 

@@ -1,48 +1,66 @@
-use std::{iter::empty, ops::Range};
+use std::{fs::OpenOptions, io::Write, iter::empty, ops::Range, path::PathBuf};
 
-use color_eyre::Result;
+use color_eyre::{Result, eyre::Context};
 use enum_as_inner::EnumAsInner;
+use indexmap::IndexSet;
 use jaq_core::{
     Compiler, Ctx, Filter, Native, RcIter, compile,
     load::{self, Arena, File, Loader},
 };
 use jaq_json::Val;
 use serde_json::Value;
-use tracing::info;
+use tracing::{info, warn};
+
+use crate::config::Config;
+
+const INITIAL_PROMPT: &str = ".";
 
 #[derive(Debug, Default, Clone, EnumAsInner)]
 pub enum Jaqqer {
     #[default]
     Dormant,
     Prompt {
+        /// Current prompt typed by user so far (can be invalid)
         prompt: String,
+        /// Horizontal position of the cursor where to type the next charater into `prompt`
         cursor: u16,
+        /// Vertical index in the history. 0 is using `prompt`, any bigger value the closest
+        /// matching prompt which was last active
+        index: usize,
+        /// List of errors which are wrong with `prompt`
         errors: Reports,
     },
     Active {
+        /// Currently active and valid prompt
         prompt: String,
+        /// Cached horizontal cursor position from last edit, used to restore on ESC
         cursor: u16,
+        /// Cached errors to restore on ESC
         errors: Reports,
     },
 }
 
 impl Jaqqer {
     /// Put this JQ filter in edit mode, if it isn't already
-    pub(crate) fn edit(self) -> Self {
+    pub(crate) fn edit(self, history: &mut History) -> Self {
+        history.stage(INITIAL_PROMPT);
         match self {
             Self::Dormant => Self::Prompt {
-                prompt: ".".into(),
+                prompt: INITIAL_PROMPT.into(),
                 errors: Default::default(),
                 cursor: 1,
+                index: 0,
             },
             Self::Prompt {
                 prompt,
                 cursor,
                 errors,
+                index: history,
             } => Self::Prompt {
                 prompt,
                 cursor,
                 errors,
+                index: history,
             },
             Self::Active {
                 prompt,
@@ -52,20 +70,23 @@ impl Jaqqer {
                 prompt,
                 cursor,
                 errors,
+                index: 0,
             },
         }
     }
 
     /// Put this JQ filter in active mode, if it isn't already
-    pub(crate) fn activate(self) -> Jaqqer {
+    pub(crate) fn activate(self, history: &mut History) -> Jaqqer {
         match self {
             Self::Dormant => Self::Dormant,
             Self::Prompt {
                 prompt,
                 cursor,
                 errors,
+                ..
             } => {
                 info!(jq = prompt, "activate");
+                history.commit();
                 Self::Active {
                     prompt,
                     cursor,
@@ -108,11 +129,17 @@ impl Jaqqer {
         self
     }
 
-    pub(crate) fn input(mut self, c: char) -> Self {
-        if let Some((prompt, cursor, ..)) = self.as_prompt_mut() {
+    pub(crate) fn input(mut self, c: char, history: &mut History) -> Self {
+        if let Some((prompt, cursor, index, ..)) = self.as_prompt_mut() {
             prompt.insert(*cursor as usize, c);
+            history.stage(prompt);
+            *index = 0;
             *cursor += 1;
         }
+        self.update_errors()
+    }
+
+    fn update_errors(mut self) -> Self {
         let e = self.compile().err().into_iter().flatten();
         if let Some((.., errors)) = self.as_prompt_mut() {
             errors.clear();
@@ -121,10 +148,65 @@ impl Jaqqer {
         self
     }
 
-    pub(crate) fn backspace(mut self) -> Self {
-        if let Some((prompt, cursor, ..)) = self.as_prompt_mut() {
+    pub(crate) fn up(self, history: &History) -> Self {
+        match self.into_prompt() {
+            Err(original) => original,
+            Ok((prompt, cursor, index, errors)) => {
+                let new_index = (index + 1).min(history.len());
+                history
+                    .lookup(new_index)
+                    .map(|prompt| {
+                        Self::Prompt {
+                            cursor: prompt.chars().count() as u16,
+                            prompt,
+                            index: new_index,
+                            errors: Default::default(),
+                        }
+                        .update_errors()
+                    })
+                    .unwrap_or(Self::Prompt {
+                        prompt,
+                        cursor,
+                        index,
+                        errors,
+                    })
+            }
+        }
+    }
+
+    pub(crate) fn down(self, history: &History) -> Self {
+        match self.into_prompt() {
+            Err(original) => original,
+            Ok((prompt, cursor, index, errors)) => {
+                let new_index = index.saturating_sub(1).min(history.len());
+                history
+                    .lookup(new_index)
+                    .map(|prompt| {
+                        Self::Prompt {
+                            cursor: prompt.chars().count() as u16,
+                            prompt,
+                            index: new_index,
+                            errors: Default::default(),
+                        }
+                        .update_errors()
+                    })
+                    .unwrap_or(Self::Prompt {
+                        prompt,
+                        cursor,
+                        index,
+                        errors,
+                    })
+            }
+        }
+    }
+
+    pub(crate) fn backspace(mut self, history: &mut History) -> Self {
+        if let Some((prompt, cursor, index, ..)) = self.as_prompt_mut() {
             if !prompt.is_empty() && *cursor > 0 {
                 prompt.remove(*cursor as usize - 1);
+                history.stage(prompt);
+                *index = 0;
+
                 *cursor -= 1;
             }
         }
@@ -136,11 +218,13 @@ impl Jaqqer {
         self
     }
 
-    pub(crate) fn delete(mut self) -> Self {
-        if let Some((prompt, cursor, ..)) = self.as_prompt_mut() {
+    pub(crate) fn delete(mut self, history: &mut History) -> Self {
+        if let Some((prompt, cursor, index, ..)) = self.as_prompt_mut() {
             let c = *cursor as usize;
             if !prompt.is_empty() && c < prompt.chars().count() {
                 prompt.remove(c);
+                history.stage(prompt);
+                *index = 0;
             }
         }
         self
@@ -149,8 +233,8 @@ impl Jaqqer {
     pub(crate) fn compile(&self) -> Result<Filter<Native<Val>>, Reports> {
         let Some(code) = self
             .as_prompt()
-            .or(self.as_active())
-            .map(|(p, ..)| p.as_str())
+            .map(|(prompt, ..)| prompt.as_str())
+            .or(self.as_active().map(|(prompt, ..)| prompt.as_str()))
         else {
             return Ok(Default::default());
         };
@@ -196,6 +280,91 @@ impl Jaqqer {
             .filter_map(|value| value.ok())
             .map(Value::from)
             .collect())
+    }
+}
+
+pub struct History {
+    path: PathBuf,
+    commited: IndexSet<String>,
+    staging: String,
+}
+
+impl History {
+    pub fn load() -> Result<Self> {
+        let path = Config::history()?;
+        let content = std::fs::read_to_string(&path).wrap_err(path.display().to_string())?;
+        let list = content
+            .lines()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .rev()
+            .map(ToOwned::to_owned)
+            .collect();
+
+        tracing::debug!(list = ?list, "load");
+        Ok(Self {
+            path,
+            commited: list,
+            staging: Default::default(),
+        })
+    }
+
+    fn stage(&mut self, prompt: &str) {
+        tracing::debug!(prompt = prompt, "stage");
+        self.staging = prompt.into();
+    }
+
+    fn commit(&mut self) {
+        if self.staging.is_empty() || self.staging == INITIAL_PROMPT {
+            return;
+        }
+        let commit = self.staging.clone();
+        info!(commit = commit, "History::commit");
+        let new_value = self.commited.shift_insert(0, commit.clone());
+        if !new_value {
+            return;
+        }
+
+        let result = OpenOptions::new()
+            .append(true)
+            .open(&self.path)
+            .wrap_err("failed to open history file")
+            .and_then(|mut file| {
+                writeln!(file, "{}", &commit).wrap_err("failed to append prompt to history file")
+            });
+        if let Err(e) = result {
+            warn!(prompt = commit, "{e}");
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &str> {
+        self.commited
+            .iter()
+            .filter(|c| c.starts_with(&self.staging))
+            .map(|s| s.as_str())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn len(&self) -> usize {
+        self.iter().count()
+    }
+
+    /// Lookup from bottom of history
+    fn lookup(&self, index: usize) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        if index == 0 {
+            info!(index = index, prompt = self.staging, "History::lookup");
+            return Some(self.staging.clone());
+        }
+
+        let commit = self.iter().nth(index - 1)?;
+        info!(index = index, prompt = commit, "History::lookup");
+        Some(commit.into())
     }
 }
 

@@ -51,13 +51,9 @@ fn render_topics(frame: &mut Frame, area: Rect, model: &Model, filter: Option<&F
     ])
     .areas(area);
 
-    let [counter, host, indicator] = Layout::horizontal([Length(6), Fill(0), Length(6)]).areas(top);
+    let [host, indicator] = Layout::horizontal([Fill(0), Length(6)]).areas(top);
 
     // Top header
-    frame.render_widget(
-        Paragraph::new(format!("{}", model.counter)).dark_gray(),
-        counter,
-    );
     frame.render_widget(
         Paragraph::new(model.broker().to_string()).centered().bold(),
         host,

@@ -39,7 +39,6 @@ pub struct Model {
 
     pub connected: bool,
     pub shutdown: bool,
-    pub counter: i32,
     broker: Url,
 
     mode: Mode,
@@ -110,7 +109,6 @@ impl Model {
             clipboard: ClipboardProvider::new().map_err(|e| eyre!("{e}"))?,
             connected: false,
             shutdown: false,
-            counter: 0,
             copy: 0,
             history: History::load()?,
             messages: Default::default(),
@@ -725,7 +723,6 @@ impl Model {
 
     #[instrument(skip_all, level = Level::DEBUG, fields(topic = message.topic.as_str(),  retain = message.retain))]
     fn on_message(&mut self, message: Message) {
-        self.counter += 1;
         self.messages
             .entry(message.topic.as_str().into())
             .and_modify(|m| m.update(message.clone(), &self.config))

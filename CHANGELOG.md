@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-* Add JQ history with '<UP>'/'<DOWN>'
+* Add JQ history with `<UP>`/`<DOWN>`
+* Remove message counter in topics overview
 
 ## 1.2.0
 

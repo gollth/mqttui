@@ -163,9 +163,6 @@ impl Model {
     fn _message(&self, message: &Message) -> Option<String> {
         let data = message.data.as_ref().ok()?;
         let (.., jq) = self.mode.as_detail()?;
-        if !jq.is_active() {
-            return None;
-        }
         let x = jq
             .run(data.clone())
             .ok()?

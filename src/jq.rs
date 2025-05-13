@@ -22,6 +22,8 @@ pub enum Jaqqer {
     Prompt {
         /// Current prompt typed by user so far (can be invalid)
         prompt: String,
+        /// Previously (valid) applied filter
+        previous: String,
         /// Horizontal position of the cursor where to type the next charater into `prompt`
         cursor: u16,
         /// Vertical index in the history. 0 is using `prompt`, any bigger value the closest
@@ -47,17 +49,20 @@ impl Jaqqer {
         match self {
             Self::Dormant => Self::Prompt {
                 prompt: INITIAL_PROMPT.into(),
+                previous: INITIAL_PROMPT.into(),
                 errors: Default::default(),
                 cursor: 1,
                 index: 0,
             },
             Self::Prompt {
                 prompt,
+                previous,
                 cursor,
                 errors,
                 index: history,
             } => Self::Prompt {
                 prompt,
+                previous,
                 cursor,
                 errors,
                 index: history,
@@ -67,6 +72,7 @@ impl Jaqqer {
                 cursor,
                 errors,
             } => Self::Prompt {
+                previous: prompt.clone(),
                 prompt,
                 cursor,
                 errors,
@@ -130,7 +136,7 @@ impl Jaqqer {
     }
 
     pub(crate) fn input(mut self, c: char, history: &mut History) -> Self {
-        if let Some((prompt, cursor, index, ..)) = self.as_prompt_mut() {
+        if let Some((prompt, _, cursor, index, ..)) = self.as_prompt_mut() {
             prompt.insert(*cursor as usize, c);
             history.stage(prompt);
             *index = 0;
@@ -151,7 +157,7 @@ impl Jaqqer {
     pub(crate) fn up(self, history: &History) -> Self {
         match self.into_prompt() {
             Err(original) => original,
-            Ok((prompt, cursor, index, errors)) => {
+            Ok((prompt, previous, cursor, index, errors)) => {
                 let new_index = (index + 1).min(history.len());
                 history
                     .lookup(new_index)
@@ -159,6 +165,7 @@ impl Jaqqer {
                         Self::Prompt {
                             cursor: prompt.chars().count() as u16,
                             prompt,
+                            previous: previous.clone(),
                             index: new_index,
                             errors: Default::default(),
                         }
@@ -166,6 +173,7 @@ impl Jaqqer {
                     })
                     .unwrap_or(Self::Prompt {
                         prompt,
+                        previous,
                         cursor,
                         index,
                         errors,
@@ -177,7 +185,7 @@ impl Jaqqer {
     pub(crate) fn down(self, history: &History) -> Self {
         match self.into_prompt() {
             Err(original) => original,
-            Ok((prompt, cursor, index, errors)) => {
+            Ok((prompt, previous, cursor, index, errors)) => {
                 let new_index = index.saturating_sub(1).min(history.len());
                 history
                     .lookup(new_index)
@@ -185,6 +193,7 @@ impl Jaqqer {
                         Self::Prompt {
                             cursor: prompt.chars().count() as u16,
                             prompt,
+                            previous: previous.clone(),
                             index: new_index,
                             errors: Default::default(),
                         }
@@ -192,6 +201,7 @@ impl Jaqqer {
                     })
                     .unwrap_or(Self::Prompt {
                         prompt,
+                        previous,
                         cursor,
                         index,
                         errors,
@@ -201,7 +211,7 @@ impl Jaqqer {
     }
 
     pub(crate) fn backspace(mut self, history: &mut History) -> Self {
-        if let Some((prompt, cursor, index, ..)) = self.as_prompt_mut() {
+        if let Some((prompt, _, cursor, index, ..)) = self.as_prompt_mut() {
             if !prompt.is_empty() && *cursor > 0 {
                 prompt.remove(*cursor as usize - 1);
                 history.stage(prompt);
@@ -219,7 +229,7 @@ impl Jaqqer {
     }
 
     pub(crate) fn delete(mut self, history: &mut History) -> Self {
-        if let Some((prompt, cursor, index, ..)) = self.as_prompt_mut() {
+        if let Some((prompt, _, cursor, index, ..)) = self.as_prompt_mut() {
             let c = *cursor as usize;
             if !prompt.is_empty() && c < prompt.chars().count() {
                 prompt.remove(c);
@@ -231,13 +241,12 @@ impl Jaqqer {
     }
 
     pub(crate) fn compile(&self) -> Result<Filter<Native<Val>>, Reports> {
-        let Some(code) = self
-            .as_prompt()
-            .map(|(prompt, ..)| prompt.as_str())
-            .or(self.as_active().map(|(prompt, ..)| prompt.as_str()))
-        else {
-            return Ok(Default::default());
+        let code = match self {
+            Self::Dormant => return Ok(Default::default()),
+            Self::Prompt { previous, .. } => previous.as_str(),
+            Self::Active { prompt, .. } => prompt.as_str(),
         };
+
         let loader = Loader::new(jaq_std::defs().chain(jaq_json::defs()));
         let arena = Arena::default();
 

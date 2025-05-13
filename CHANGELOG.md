@@ -4,6 +4,8 @@
 
 * Add JQ history with `<UP>`/`<DOWN>`
 * Remove message counter in topics overview
+* Reuse state from MQTT broker on restart (no clean session)
+* Keep JQ filter on each apply
 
 ## 1.2.0
 

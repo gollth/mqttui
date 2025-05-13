@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## 1.3.0
 
 * Add JQ history with `<UP>`/`<DOWN>`
 * Remove message counter in topics overview

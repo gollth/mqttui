@@ -146,7 +146,7 @@ impl Jaqqer {
     }
 
     fn update_errors(mut self) -> Self {
-        let e = self.compile().err().into_iter().flatten();
+        let e = self.compile(false).err().into_iter().flatten();
         if let Some((.., errors)) = self.as_prompt_mut() {
             errors.clear();
             errors.extend(e);
@@ -220,7 +220,7 @@ impl Jaqqer {
                 *cursor -= 1;
             }
         }
-        let e = self.compile().err().into_iter().flatten();
+        let e = self.compile(false).err().into_iter().flatten();
         if let Some((.., errors)) = self.as_prompt_mut() {
             errors.clear();
             errors.extend(e);
@@ -237,13 +237,19 @@ impl Jaqqer {
                 *index = 0;
             }
         }
+        let e = self.compile(false).err().into_iter().flatten();
+        if let Some((.., errors)) = self.as_prompt_mut() {
+            errors.clear();
+            errors.extend(e);
+        }
         self
     }
 
-    pub(crate) fn compile(&self) -> Result<Filter<Native<Val>>, Reports> {
+    pub(crate) fn compile(&self, last_active: bool) -> Result<Filter<Native<Val>>, Reports> {
         let code = match self {
             Self::Dormant => return Ok(Default::default()),
-            Self::Prompt { previous, .. } => previous.as_str(),
+            Self::Prompt { previous, .. } if last_active => previous.as_str(),
+            Self::Prompt { prompt, .. } => prompt.as_str(),
             Self::Active { prompt, .. } => prompt.as_str(),
         };
 
@@ -282,7 +288,7 @@ impl Jaqqer {
     }
 
     pub(crate) fn run(&self, value: Value) -> Result<Vec<Value>, Reports> {
-        let filter = self.compile()?;
+        let filter = self.compile(true)?;
         let input = RcIter::new(empty());
         Ok(filter
             .run((Ctx::new([], &input), Val::from(value)))

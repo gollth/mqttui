@@ -96,24 +96,20 @@ pub struct KeyConfig {
 impl Config {
     pub fn path() -> Result<PathBuf> {
         let name = env!("CARGO_PKG_NAME");
-        let dir = xdg::BaseDirectories::with_prefix(name)
-            .context("failed to read XDG config directory")?;
-        Ok(dir.place_config_file("config.toml")?)
+        let path = xdg::BaseDirectories::with_prefix(name).place_config_file("config.toml")?;
+        Ok(path)
     }
 
     pub fn log() -> Result<PathBuf> {
         let name = env!("CARGO_PKG_NAME");
-        let path = xdg::BaseDirectories::with_prefix(name)
-            .context("failed to read XDG config directory")?
-            .place_cache_file(format!("{name}.log"))?;
+        let path =
+            xdg::BaseDirectories::with_prefix(name).place_cache_file(format!("{name}.log"))?;
         Ok(path)
     }
 
     pub fn history() -> Result<PathBuf> {
         let name = env!("CARGO_PKG_NAME");
-        let path = xdg::BaseDirectories::with_prefix(name)
-            .context("failed to read XDG config directory")?
-            .place_cache_file("history.jq")?;
+        let path = xdg::BaseDirectories::with_prefix(name).place_cache_file("history.jq")?;
 
         if !path.exists() {
             File::create(&path)?;

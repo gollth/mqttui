@@ -314,9 +314,9 @@ impl History {
             .filter(|line| !line.is_empty())
             .rev()
             .map(ToOwned::to_owned)
-            .collect();
+            .collect::<IndexSet<_>>();
 
-        tracing::debug!(list = ?list, "load");
+        tracing::debug!(amount = list.len(), "loading JQ history");
         Ok(Self {
             path,
             commited: list,

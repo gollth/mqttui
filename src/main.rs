@@ -13,7 +13,7 @@ use mqttui::{
 };
 use ratatui::{Terminal, prelude::Backend};
 use rumqttc::{AsyncClient, EventLoop, MqttOptions};
-use tracing::info;
+use tracing::{debug, info};
 use tracing_subscriber::{
     Layer, filter::filter_fn, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
 };
@@ -42,6 +42,10 @@ struct Args {
     /// Print the path of where the log file is placed
     #[arg(long)]
     print_log_path: bool,
+
+    /// Print the path of where the JQ history file is placed
+    #[arg(long)]
+    print_history_path: bool,
 }
 
 #[tokio::main]
@@ -55,6 +59,11 @@ async fn main() -> Result<()> {
 
     if args.print_log_path {
         println!("{}", Config::log()?.display());
+        return Ok(());
+    }
+
+    if args.print_history_path {
+        println!("{}", Config::history()?.display());
         return Ok(());
     }
 
@@ -83,7 +92,9 @@ async fn init(broker: &Url) -> Result<(AsyncClient, EventLoop)> {
                 .with_target(false)
                 .with_writer(File::create(Config::log()?)?)
                 // rumqttc is pretty verbose, ignore it
-                .with_filter(filter_fn(|meta| meta.target() != "rumqttc")),
+                .with_filter(filter_fn(|meta| meta.target() != "rumqttc"))
+                // mio tracing also pretty verbose
+                .with_filter(filter_fn(|meta| meta.target() != "mio::poll")),
         )
         .init();
     info!("Started MqtTUI: {broker}");
@@ -98,6 +109,15 @@ async fn init(broker: &Url) -> Result<(AsyncClient, EventLoop)> {
             .wrap_err(broker.clone())?,
         broker.port_or_known_default().unwrap_or(1883),
     );
+    match (broker.username(), broker.password().unwrap_or_default()) {
+        ("", _) | (_, "") => {}
+        (user, pw) => {
+            debug!("Using Basic Auth: {user}/{pw}");
+            options
+                .set_credentials(user, pw)
+                .set_transport(rumqttc::Transport::Tls(rumqttc::TlsConfiguration::Native));
+        }
+    }
     options
         .set_max_packet_size(10_000_000, 1024)
         .set_clean_session(false);

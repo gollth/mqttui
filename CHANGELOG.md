@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## UNRELEASED
+
+* Support MQTTs
+
 ## 1.3.0
 
 * Add JQ history with `<UP>`/`<DOWN>`

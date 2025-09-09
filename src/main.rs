@@ -13,7 +13,7 @@ use mqttui::{
 };
 use ratatui::{Terminal, prelude::Backend};
 use rumqttc::{AsyncClient, EventLoop, MqttOptions};
-use tracing::info;
+use tracing::{debug, info};
 use tracing_subscriber::{
     Layer, filter::filter_fn, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
 };
@@ -109,6 +109,15 @@ async fn init(broker: &Url) -> Result<(AsyncClient, EventLoop)> {
             .wrap_err(broker.clone())?,
         broker.port_or_known_default().unwrap_or(1883),
     );
+    match (broker.username(), broker.password().unwrap_or_default()) {
+        ("", _) | (_, "") => {}
+        (user, pw) => {
+            debug!("Using Basic Auth: {user}/{pw}");
+            options
+                .set_credentials(user, pw)
+                .set_transport(rumqttc::Transport::Tls(rumqttc::TlsConfiguration::Native));
+        }
+    }
     options
         .set_max_packet_size(10_000_000, 1024)
         .set_clean_session(false);

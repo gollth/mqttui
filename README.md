@@ -11,3 +11,12 @@ improvements:
 * ⏳ Show retained & stale topics
 * 🪄 Filter JSON messages with [jq](https://jqlang.org/)
 * 🕹️ VIM keybindings
+
+## MQTTs
+
+Do connect to a TLS enabled MQTT broker provide the protocol & basic auth
+via the URL:
+
+```console
+mqttui mqtts://my-user:my-password@my-host:8883
+```

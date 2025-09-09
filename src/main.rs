@@ -42,6 +42,10 @@ struct Args {
     /// Print the path of where the log file is placed
     #[arg(long)]
     print_log_path: bool,
+
+    /// Print the path of where the JQ history file is placed
+    #[arg(long)]
+    print_history_path: bool,
 }
 
 #[tokio::main]
@@ -55,6 +59,11 @@ async fn main() -> Result<()> {
 
     if args.print_log_path {
         println!("{}", Config::log()?.display());
+        return Ok(());
+    }
+
+    if args.print_history_path {
+        println!("{}", Config::history()?.display());
         return Ok(());
     }
 

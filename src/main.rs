@@ -83,7 +83,9 @@ async fn init(broker: &Url) -> Result<(AsyncClient, EventLoop)> {
                 .with_target(false)
                 .with_writer(File::create(Config::log()?)?)
                 // rumqttc is pretty verbose, ignore it
-                .with_filter(filter_fn(|meta| meta.target() != "rumqttc")),
+                .with_filter(filter_fn(|meta| meta.target() != "rumqttc"))
+                // mio tracing also pretty verbose
+                .with_filter(filter_fn(|meta| meta.target() != "mio::poll")),
         )
         .init();
     info!("Started MqtTUI: {broker}");

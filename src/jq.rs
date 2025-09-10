@@ -1,8 +1,9 @@
-use std::{fs::OpenOptions, io::Write, iter::empty, ops::Range, path::PathBuf};
+use std::{fmt::Display, fs::OpenOptions, io::Write, iter::empty, ops::Range, path::PathBuf};
 
 use color_eyre::{Result, eyre::Context};
 use enum_as_inner::EnumAsInner;
 use indexmap::IndexSet;
+use itertools::Itertools;
 use jaq_core::{
     Compiler, Ctx, Filter, Native, RcIter, compile,
     load::{self, Arena, File, Loader},
@@ -14,6 +15,7 @@ use tracing::{info, warn};
 use crate::config::Config;
 
 const INITIAL_PROMPT: &str = ".";
+const TOPIC_HISTORY_DELIMITER: &str = ":|:";
 
 #[derive(Debug, Default, Clone, EnumAsInner)]
 pub enum Jaqqer {
@@ -82,7 +84,7 @@ impl Jaqqer {
     }
 
     /// Put this JQ filter in active mode, if it isn't already
-    pub(crate) fn activate(self, history: &mut History) -> Jaqqer {
+    pub(crate) fn activate(self, history: &mut History, topic: &str) -> Jaqqer {
         match self {
             Self::Dormant => Self::Dormant,
             Self::Prompt {
@@ -92,7 +94,7 @@ impl Jaqqer {
                 ..
             } => {
                 info!(jq = prompt, "activate");
-                history.commit();
+                history.commit(topic);
                 Self::Active {
                     prompt,
                     cursor,
@@ -154,13 +156,13 @@ impl Jaqqer {
         self
     }
 
-    pub(crate) fn up(self, history: &History) -> Self {
+    pub(crate) fn up(self, history: &History, topic: &str) -> Self {
         match self.into_prompt() {
             Err(original) => original,
             Ok((prompt, previous, cursor, index, errors)) => {
-                let new_index = (index + 1).min(history.len());
+                let new_index = (index + 1).min(history.len(topic));
                 history
-                    .lookup(new_index)
+                    .lookup(new_index, topic)
                     .map(|prompt| {
                         Self::Prompt {
                             cursor: prompt.chars().count() as u16,
@@ -182,13 +184,13 @@ impl Jaqqer {
         }
     }
 
-    pub(crate) fn down(self, history: &History) -> Self {
+    pub(crate) fn down(self, history: &History, topic: &str) -> Self {
         match self.into_prompt() {
             Err(original) => original,
             Ok((prompt, previous, cursor, index, errors)) => {
-                let new_index = index.saturating_sub(1).min(history.len());
+                let new_index = index.saturating_sub(1).min(history.len(topic));
                 history
-                    .lookup(new_index)
+                    .lookup(new_index, topic)
                     .map(|prompt| {
                         Self::Prompt {
                             cursor: prompt.chars().count() as u16,
@@ -300,8 +302,34 @@ impl Jaqqer {
 
 pub struct History {
     path: PathBuf,
-    commited: IndexSet<String>,
+    commited: IndexSet<Item>,
     staging: String,
+}
+
+/// A history item composed of the JQ filter and the topic on which it was used
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+struct Item {
+    topic: String,
+    filter: String,
+}
+
+impl Display for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{TOPIC_HISTORY_DELIMITER}{}", self.topic, self.filter)
+    }
+}
+
+impl Item {
+    fn new(topic: &str, filter: &str) -> Self {
+        Self {
+            topic: topic.split('/').next_back().unwrap_or(topic).into(),
+            filter: filter.into(),
+        }
+    }
+    fn matches(&self, topic: &str) -> bool {
+        let suffix = topic.split('/').next_back().unwrap_or(topic);
+        self.topic.is_empty() || self.topic.ends_with(suffix)
+    }
 }
 
 impl History {
@@ -312,8 +340,14 @@ impl History {
             .lines()
             .map(|line| line.trim())
             .filter(|line| !line.is_empty())
+            .map(|line| {
+                let (topic, filter) = line
+                    .split(TOPIC_HISTORY_DELIMITER)
+                    .next_tuple()
+                    .unwrap_or(("", line));
+                Item::new(topic, filter)
+            })
             .rev()
-            .map(ToOwned::to_owned)
             .collect::<IndexSet<_>>();
 
         tracing::debug!(amount = list.len(), "loading JQ history");
@@ -329,13 +363,15 @@ impl History {
         self.staging = prompt.into();
     }
 
-    fn commit(&mut self) {
+    fn commit(&mut self, topic: &str) {
         if self.staging.is_empty() || self.staging == INITIAL_PROMPT {
             return;
         }
         let commit = self.staging.clone();
-        info!(commit = commit, "History::commit");
-        let new_value = self.commited.shift_insert(0, commit.clone());
+        let topic = topic.split('/').next_back().unwrap_or(topic);
+        info!(commit = commit, topic = topic, "History::commit");
+        let item = Item::new(topic, &commit);
+        let new_value = self.commited.shift_insert(0, item.clone());
         if !new_value {
             return;
         }
@@ -345,31 +381,34 @@ impl History {
             .open(&self.path)
             .wrap_err("failed to open history file")
             .and_then(|mut file| {
-                writeln!(file, "{}", &commit).wrap_err("failed to append prompt to history file")
+                writeln!(file, "{item}").wrap_err("failed to append prompt to history file")
             });
         if let Err(e) = result {
             warn!(prompt = commit, "{e}");
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = &str> {
+    fn iter(&self) -> impl Iterator<Item = &Item> {
         self.commited
             .iter()
-            .filter(|c| c.starts_with(&self.staging))
-            .map(|s| s.as_str())
+            .filter(|item| item.filter.starts_with(&self.staging))
     }
 
-    fn is_empty(&self) -> bool {
-        self.len() == 0
+    fn matching(&self, topic: &str) -> impl Iterator<Item = &Item> {
+        self.iter().filter(|item| item.matches(topic))
     }
 
-    fn len(&self) -> usize {
-        self.iter().count()
+    fn is_empty(&self, topic: &str) -> bool {
+        self.len(topic) == 0
+    }
+
+    fn len(&self, topic: &str) -> usize {
+        self.matching(topic).count()
     }
 
     /// Lookup from bottom of history
-    fn lookup(&self, index: usize) -> Option<String> {
-        if self.is_empty() {
+    fn lookup(&self, index: usize, topic: &str) -> Option<String> {
+        if self.is_empty(topic) {
             return None;
         }
         if index == 0 {
@@ -377,8 +416,13 @@ impl History {
             return Some(self.staging.clone());
         }
 
-        let commit = self.iter().nth(index - 1)?;
-        info!(index = index, prompt = commit, "History::lookup");
+        let commit = self.matching(topic).nth(index - 1)?.filter.as_str();
+        info!(
+            index = index,
+            topic = topic,
+            prompt = commit,
+            "History::lookup"
+        );
         Some(commit.into())
     }
 }
@@ -407,7 +451,7 @@ impl Report {
 
     fn io(code: &str, (path, error): (&str, String)) -> Self {
         Report {
-            message: format!("could not load file {}: {}", path, error),
+            message: format!("could not load file {path}: {error}"),
             span: load::span(code, path),
         }
     }

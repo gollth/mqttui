@@ -415,10 +415,10 @@ impl Model {
                 },
                 Event::Render(RenderEvent::Select) if jq.is_prompt() && jq.errors().is_empty() => {
                     Mode::Detail {
+                        jq: jq.activate(&mut self.history, &topic),
                         topic,
                         scroll,
                         index,
-                        jq: jq.activate(&mut self.history),
                     }
                 }
 
@@ -479,10 +479,10 @@ impl Model {
                     jq,
                 },
                 Event::Render(RenderEvent::Up) => Mode::Detail {
+                    jq: jq.up(&self.history, &topic),
                     topic,
                     scroll,
                     index,
-                    jq: jq.up(&self.history),
                 },
                 Event::Render(RenderEvent::Char('k')) if !jq.is_prompt() => Mode::Detail {
                     topic,
@@ -511,10 +511,10 @@ impl Model {
                     jq,
                 },
                 Event::Render(RenderEvent::Down) => Mode::Detail {
+                    jq: jq.down(&self.history, &topic),
                     topic,
                     scroll,
                     index,
-                    jq: jq.down(&self.history),
                 },
                 Event::Render(RenderEvent::Char('j')) if !jq.is_prompt() => Mode::Detail {
                     topic,

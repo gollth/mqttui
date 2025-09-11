@@ -3,6 +3,7 @@
 ## UNRELEASED
 
 * Support MQTTs
+* Group JQ history items by topic suffix
 
 ## 1.3.0
 

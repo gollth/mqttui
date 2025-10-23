@@ -149,7 +149,7 @@ fn render_details(
         details,
     );
 
-    let count = model.message_count(topic) + 1;
+    let count = model.message_count(topic);
     frame.render_widget(
         Crumbs::new(index, count).block(
             Block::new()

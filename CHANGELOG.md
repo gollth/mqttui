@@ -4,6 +4,8 @@
 
 * Support MQTTs
 * Group JQ history items by topic suffix
+* Fix left & right keys in message history
+* Fix proper amount of crumbs in message history
 
 ## 1.3.0
 

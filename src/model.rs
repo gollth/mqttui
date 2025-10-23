@@ -553,7 +553,7 @@ impl Model {
                     scroll,
                     jq,
                 },
-                Event::Render(RenderEvent::Right) if !jq.is_prompt() => Mode::Detail {
+                Event::Render(RenderEvent::Left) if !jq.is_prompt() => Mode::Detail {
                     index: index
                         .map(|i| i + 1)
                         .filter(|i| *i < self.message_count(&topic)),
@@ -561,7 +561,7 @@ impl Model {
                     scroll,
                     jq,
                 },
-                Event::Render(RenderEvent::Left) if !jq.is_prompt() => Mode::Detail {
+                Event::Render(RenderEvent::Right) if !jq.is_prompt() => Mode::Detail {
                     scroll,
                     index: Some(
                         index

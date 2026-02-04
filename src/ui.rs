@@ -33,7 +33,7 @@ pub fn render(frame: &mut Frame, model: &Model) {
     }
 }
 
-fn connection_status(model: &Model) -> Paragraph {
+fn connection_status(model: &Model) -> Paragraph<'_> {
     Paragraph::new("● ")
         .style(Style::new().fg(if model.connected {
             Color::Green

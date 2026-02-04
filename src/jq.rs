@@ -1,3 +1,4 @@
+#![allow(unused_assignments)]
 use std::{fmt::Display, fs::OpenOptions, io::Write, iter::empty, ops::Range, path::PathBuf};
 
 use color_eyre::{Result, eyre::Context};

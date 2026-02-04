@@ -1,3 +1,4 @@
+#![allow(unused_assignments)]
 use std::{
     borrow::Cow,
     cmp::Reverse,
@@ -144,7 +145,7 @@ impl Model {
             .map(|(_, topic, m)| (topic, &m.latest))
     }
 
-    pub fn message(&self, topic: &str, index: Option<usize>) -> Option<Cow<str>> {
+    pub fn message(&self, topic: &str, index: Option<usize>) -> Option<Cow<'_, str>> {
         let m = self.messages.get(topic)?.get(index)?;
         Some(
             self._message(m)
@@ -746,7 +747,7 @@ impl Topic {
         self.name.as_str()
     }
 
-    pub(crate) fn line(&self, base: Style) -> Line {
+    pub(crate) fn line(&self, base: Style) -> Line<'_> {
         self.name
             .char_indices()
             .map(|(i, c)| {

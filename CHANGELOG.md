@@ -1,11 +1,12 @@
 # CHANGELOG
 
-## UNRELEASED
+## 1.4.0
 
 * Support MQTTs
 * Group JQ history items by topic suffix
 * Fix left & right keys in message history
 * Fix proper amount of crumbs in message history
+* Update to Rust 1.92
 
 ## 1.3.0
 

@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 1.5.0
+
+* Render CBOR messages
+* Show data format next to topic name
+
 ## 1.4.0
 
 * Support MQTTs

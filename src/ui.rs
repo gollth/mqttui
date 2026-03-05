@@ -106,7 +106,7 @@ fn render_details(
     scroll: u16,
     index: Option<usize>,
 ) {
-    let message = model.message(topic, index).unwrap_or_default();
+    let (message, format) = model.message(topic, index).unwrap_or_default();
     let error = model.error(topic, index);
 
     let [header, pane, crumbs, warning, footer] = Layout::vertical([
@@ -118,11 +118,13 @@ fn render_details(
     ])
     .areas(area);
 
-    let [header, indicator] = Layout::horizontal([Fill(0), Length(2)]).areas(header);
+    let [header, fmt, indicator] =
+        Layout::horizontal([Fill(0), Length(6), Length(2)]).areas(header);
     let [details, mut scroller] = Layout::horizontal([Fill(0), Length(1)]).areas(pane);
 
     // Top header with topic name
     frame.render_widget(Paragraph::new(topic).bold().centered(), header);
+    frame.render_widget(Paragraph::new(format.to_string()), fmt);
     frame.render_widget(connection_status(model), indicator);
 
     // in case of error we wrap the message so we always show a scrollbar since we don't know

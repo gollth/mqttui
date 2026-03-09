@@ -11,6 +11,7 @@ improvements:
 * ⏳ Show retained & stale topics
 * 🪄 Filter JSON messages with [jq](https://jqlang.org/)
 * 🕹️ VIM keybindings
+* 🔟 CBOR support
 
 ## MQTTs
 

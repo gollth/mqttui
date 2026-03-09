@@ -3,6 +3,7 @@ use std::{
     borrow::Cow,
     cmp::Reverse,
     collections::{BTreeMap, HashSet, VecDeque},
+    fmt::Display,
     ops::Deref,
     rc::Rc,
     time::Instant,
@@ -22,6 +23,7 @@ use ratatui::{
     style::{Color, Style},
     text::{Line, Span, Text},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{Level, instrument};
 use url::Url;
@@ -67,9 +69,29 @@ pub struct Topic {
 pub struct Message {
     pub(crate) topic: Topic,
     pub(crate) data: Result<Value, String>,
+    pub(crate) format: Format,
     pub(crate) text: String,
     pub(crate) retain: bool,
     last: Instant,
+}
+
+#[derive(Clone, Copy, Default, Serialize, Deserialize, Derivative)]
+#[derivative(Debug)]
+pub enum Format {
+    #[default]
+    Unknown,
+    Json,
+    Cbor,
+}
+
+impl Display for Format {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown => write!(f, "???"),
+            Self::Json => write!(f, "JSON"),
+            Self::Cbor => write!(f, "CBOR"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, EnumAsInner)]
@@ -145,13 +167,14 @@ impl Model {
             .map(|(_, topic, m)| (topic, &m.latest))
     }
 
-    pub fn message(&self, topic: &str, index: Option<usize>) -> Option<Cow<'_, str>> {
+    pub fn message(&self, topic: &str, index: Option<usize>) -> Option<(Cow<'_, str>, Format)> {
         let m = self.messages.get(topic)?.get(index)?;
-        Some(
+        Some((
             self._message(m)
                 .map(Cow::Owned)
                 .unwrap_or(Cow::Borrowed(&m.text)),
-        )
+            m.format,
+        ))
     }
 
     pub fn message_count(&self, topic: &str) -> usize {
@@ -459,7 +482,7 @@ impl Model {
 
                 // Copy
                 Event::Render(RenderEvent::Char(c)) if !jq.is_prompt() && keys.copy == c => {
-                    if let Some(msg) = self.message(&topic, index) {
+                    if let Some((msg, _)) = self.message(&topic, index) {
                         let _ = self.clipboard.set_contents(msg.into());
                         self.copy += 2;
                     }
@@ -606,6 +629,7 @@ impl Model {
                     scroll: self
                         .message(&topic, index)
                         .unwrap_or_default()
+                        .0
                         .lines()
                         .count()
                         .saturating_sub(SCROLL_BOTTOM_OFFSET) as u16,
@@ -818,8 +842,14 @@ impl Message {
 
 impl From<rumqttc::Publish> for Message {
     fn from(value: rumqttc::Publish) -> Self {
-        let message = serde_json::from_slice::<serde_json::Value>(&value.payload)
-            .wrap_err("Message is not proper JSON");
+        let message = match std::str::from_utf8(&value.payload) {
+            Ok(text) => serde_json::from_str::<serde_json::Value>(text)
+                .map(|value| (value, Format::Json))
+                .wrap_err("Message is not proper JSON"),
+            Err(_) => ciborium::from_reader(value.payload.as_ref())
+                .map(|value| (value, Format::Cbor))
+                .wrap_err("Message is not proper CBOR"),
+        };
         Self {
             topic: Topic {
                 name: value.topic,
@@ -831,7 +861,11 @@ impl From<rumqttc::Publish> for Message {
                 .and_then(|message| serde_json::to_string_pretty(&message).ok())
                 .or_else(|| String::from_utf8(value.payload.into()).ok())
                 .unwrap_or_default(),
-            data: message.map_err(|e| format!("{e:#}")),
+            format: message
+                .as_ref()
+                .map(|(_, format)| *format)
+                .unwrap_or_default(),
+            data: message.map(|(m, _)| m).map_err(|e| format!("{e:#}")),
             retain: value.retain,
             last: Instant::now(),
         }

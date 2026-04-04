@@ -3,6 +3,7 @@
 ## UNRELEASED
 
 * Don't flip flop for multiple instances
+* Fix bug where "retain" message sometimes not show correctly
 
 ## 1.5.0
 

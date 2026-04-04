@@ -11,6 +11,7 @@ use mqttui::{
     model::Model,
     ui,
 };
+use petname::petname;
 use ratatui::{Terminal, prelude::Backend};
 use rumqttc::{AsyncClient, EventLoop, MqttOptions};
 use tracing::{debug, info};
@@ -99,7 +100,11 @@ async fn init(broker: &Url) -> Result<(AsyncClient, EventLoop)> {
         .init();
     info!("Started MqtTUI: {broker}");
 
-    let name = env!("CARGO_PKG_NAME");
+    let name = format!(
+        "{}-{}",
+        env!("CARGO_PKG_NAME"),
+        petname(2, "-").unwrap_or_default()
+    );
 
     let mut options = MqttOptions::new(
         name,

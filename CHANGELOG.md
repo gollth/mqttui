@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## UNRELEASED
+
+* Don't flip flop for multiple instances
+
 ## 1.5.0
 
 * Render CBOR messages

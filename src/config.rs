@@ -3,6 +3,7 @@ use std::{fs::File, path::PathBuf, time::Duration};
 use color_eyre::{Result, eyre::Context};
 use derivative::Derivative;
 use ratatui::style::Color;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -15,6 +16,9 @@ pub struct Config {
 
     #[serde(default)]
     pub keys: KeyConfig,
+
+    #[serde(default)]
+    pub protocols: Vec<ProtocolConfig>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Derivative)]
@@ -91,6 +95,23 @@ pub struct KeyConfig {
     #[serde(default = "defaults::keys::copy")]
     #[derivative(Default(value = "defaults::keys::copy()"))]
     pub copy: char,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Derivative)]
+pub struct ProtocolConfig {
+    // A (short) name for the protocol to show in the top right, if detected
+    pub label: String,
+
+    /// Path to the program to call for interpreting this protocol
+    pub program: String,
+
+    /// Command line arguments to `program`
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+
+    /// On which MQTT topic(s), this protocol is active?
+    #[serde(with = "serde_regex")]
+    pub topic: Regex,
 }
 
 impl Config {

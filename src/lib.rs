@@ -3,5 +3,6 @@ pub mod crumbs;
 pub mod events;
 pub mod highlight;
 pub mod jq;
+pub mod message;
 pub mod model;
 pub mod ui;

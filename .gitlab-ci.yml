@@ -8,7 +8,7 @@ stages:
 
 ci:
   stage: ci
-  image: ${REGISTRY_URL}/fleet/fleet/rust-base:2
+  image: ${REGISTRY_URL}/fleet/fleet/rust-base:1.92.0
   tags:
     - shared-amd64-high
   before_script:

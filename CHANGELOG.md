@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## UNRELEASED
+## 1.6.0
 
 * Don't flip flop for multiple instances
 * Fix bug where "retain" message sometimes not show correctly

@@ -214,14 +214,15 @@ impl Jaqqer {
     }
 
     pub(crate) fn backspace(mut self, history: &mut History) -> Self {
-        if let Some((prompt, _, cursor, index, ..)) = self.as_prompt_mut() {
-            if !prompt.is_empty() && *cursor > 0 {
-                prompt.remove(*cursor as usize - 1);
-                history.stage(prompt);
-                *index = 0;
+        if let Some((prompt, _, cursor, index, ..)) = self.as_prompt_mut()
+            && !prompt.is_empty()
+            && *cursor > 0
+        {
+            prompt.remove(*cursor as usize - 1);
+            history.stage(prompt);
+            *index = 0;
 
-                *cursor -= 1;
-            }
+            *cursor -= 1;
         }
         let e = self.compile(false).err().into_iter().flatten();
         if let Some((.., errors)) = self.as_prompt_mut() {

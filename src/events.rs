@@ -61,26 +61,20 @@ pub async fn start(
     let tx2 = tx.clone();
     task::spawn(async move {
         loop {
-            if eventloop.poll().await.is_err() {
-                sleep(Duration::from_millis(500)).await;
-                let _ = tx2.send(Event::Render(RenderEvent::Disconnect));
-                continue;
-            }
-
-            let _ = client.subscribe("#", QoS::AtMostOnce).await;
-            let _ = tx2.send(Event::Render(RenderEvent::Connect));
-            loop {
-                match eventloop.poll().await {
-                    Err(ConnectionError::Io(_)) => {
-                        let _ = tx2.send(Event::Render(RenderEvent::Disconnect));
-                        break;
-                    }
-                    Err(other) => error!("Encountered unknown error: {other:#}"),
-                    Ok(rumqttc::Event::Incoming(Incoming::Publish(message))) => {
-                        let _ = tx2.send(Event::Update(UpdateEvent::Receive(message)));
-                    }
-                    _ => {}
+            match eventloop.poll().await {
+                Ok(rumqttc::Event::Incoming(Incoming::Publish(message))) => {
+                    let _ = tx2.send(Event::Update(UpdateEvent::Receive(message)));
                 }
+                Ok(rumqttc::Event::Incoming(Incoming::ConnAck(_))) => {
+                    let _ = client.subscribe("#", QoS::AtMostOnce).await;
+                    let _ = tx2.send(Event::Render(RenderEvent::Connect));
+                }
+                Err(ConnectionError::Io(_)) => {
+                    let _ = tx2.send(Event::Render(RenderEvent::Disconnect));
+                    sleep(Duration::from_millis(500)).await;
+                }
+                Err(other) => error!("Encountered unknown error: {other:#}"),
+                _ => {}
             }
         }
     });

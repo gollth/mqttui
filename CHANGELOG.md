@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## UNRELEASED
+
+* Don't flip flop for multiple instances
+* Fix bug where "retain" message sometimes not show correctly
+* Support for custom protocols via external decoder programs
+
 ## 1.5.0
 
 * Render CBOR messages

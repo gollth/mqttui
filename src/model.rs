@@ -2,18 +2,14 @@
 use std::{
     borrow::Cow,
     cmp::Reverse,
-    collections::{BTreeMap, HashSet, VecDeque},
-    fmt::Display,
+    collections::{BTreeMap, HashSet},
     ops::Deref,
     rc::Rc,
     time::Instant,
 };
 
 use clipboard::{ClipboardContext, ClipboardProvider};
-use color_eyre::{
-    Result,
-    eyre::{Context, eyre},
-};
+use color_eyre::{Result, eyre::eyre};
 use derivative::Derivative;
 use enum_as_inner::EnumAsInner;
 use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
@@ -23,8 +19,6 @@ use ratatui::{
     style::{Color, Style},
     text::{Line, Span, Text},
 };
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tracing::{Level, instrument};
 use url::Url;
 
@@ -33,12 +27,14 @@ use crate::{
     events::{Event, RenderEvent, UpdateEvent},
     highlight::Highlighter,
     jq::{History, Jaqqer},
+    message::{Format, Message, Messages, Protocols},
     ui::SCROLL_BOTTOM_OFFSET,
 };
 
 pub struct Model {
     config: Config,
     highlighter: Highlighter,
+    protocols: Protocols,
 
     pub connected: bool,
     pub shutdown: bool,
@@ -53,43 +49,17 @@ pub struct Model {
     history: History,
 }
 
-pub struct Messages {
-    topic: Topic,
-    latest: Message,
-    queue: VecDeque<Message>,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Topic {
     name: String,
     highlights: HashSet<usize>,
 }
 
-#[derive(Clone, Debug)]
-pub struct Message {
-    pub(crate) topic: Topic,
-    pub(crate) data: Result<Value, String>,
-    pub(crate) format: Format,
-    pub(crate) text: String,
-    pub(crate) retain: bool,
-    last: Instant,
-}
-
-#[derive(Clone, Copy, Default, Serialize, Deserialize, Derivative)]
-#[derivative(Debug)]
-pub enum Format {
-    #[default]
-    Unknown,
-    Json,
-    Cbor,
-}
-
-impl Display for Format {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unknown => write!(f, "???"),
-            Self::Json => write!(f, "JSON"),
-            Self::Cbor => write!(f, "CBOR"),
+impl Topic {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            highlights: Default::default(),
         }
     }
 }
@@ -127,6 +97,7 @@ impl Model {
         let config = Config::load()?;
         Ok(Self {
             highlighter: Highlighter::new(&config)?,
+            protocols: Protocols::new(&config),
             config,
             broker,
             clipboard: ClipboardProvider::new().map_err(|e| eyre!("{e}"))?,
@@ -173,7 +144,7 @@ impl Model {
             self._message(m)
                 .map(Cow::Owned)
                 .unwrap_or(Cow::Borrowed(&m.text)),
-            m.format,
+            m.format.clone(),
         ))
     }
 
@@ -239,7 +210,7 @@ impl Model {
                 let insert = filter.is_some();
                 match event {
                     Event::Update(UpdateEvent::Receive(message)) => {
-                        self.on_message(message.into());
+                        self.on_message(self.protocols.interprete(message));
                         Mode::Topics { filter }
                     }
                     Event::Render(RenderEvent::Tick) => {
@@ -382,7 +353,7 @@ impl Model {
             } => match event {
                 // Update
                 Event::Update(UpdateEvent::Receive(message)) => {
-                    self.on_message(message.into());
+                    self.on_message(self.protocols.interprete(message));
                     Mode::Detail {
                         topic,
                         scroll,
@@ -743,7 +714,11 @@ impl Model {
         self.selection = previous;
     }
 
-    #[instrument(skip_all, level = Level::DEBUG, fields(topic = message.topic.as_str(),  retain = message.retain))]
+    #[instrument(
+        skip_all,
+        level = Level::DEBUG,
+        fields(topic = message.topic.as_str(), retain = message.retain, format = %message.format)
+    )]
     fn on_message(&mut self, message: Message) {
         self.messages
             .entry(message.topic.as_str().into())
@@ -837,38 +812,6 @@ impl Message {
             return config.colors.intime;
         }
         config.colors.stale
-    }
-}
-
-impl From<rumqttc::Publish> for Message {
-    fn from(value: rumqttc::Publish) -> Self {
-        let message = match std::str::from_utf8(&value.payload) {
-            Ok(text) => serde_json::from_str::<serde_json::Value>(text)
-                .map(|value| (value, Format::Json))
-                .wrap_err("Message is not proper JSON"),
-            Err(_) => ciborium::from_reader(value.payload.as_ref())
-                .map(|value| (value, Format::Cbor))
-                .wrap_err("Message is not proper CBOR"),
-        };
-        Self {
-            topic: Topic {
-                name: value.topic,
-                highlights: Default::default(),
-            },
-            text: message
-                .as_ref()
-                .ok()
-                .and_then(|message| serde_json::to_string_pretty(&message).ok())
-                .or_else(|| String::from_utf8(value.payload.into()).ok())
-                .unwrap_or_default(),
-            format: message
-                .as_ref()
-                .map(|(_, format)| *format)
-                .unwrap_or_default(),
-            data: message.map(|(m, _)| m).map_err(|e| format!("{e:#}")),
-            retain: value.retain,
-            last: Instant::now(),
-        }
     }
 }
 

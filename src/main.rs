@@ -11,6 +11,7 @@ use mqttui::{
     model::Model,
     ui,
 };
+use petname::petname;
 use ratatui::{Terminal, prelude::Backend};
 use rumqttc::{AsyncClient, EventLoop, MqttOptions};
 use tracing::{debug, info};
@@ -92,14 +93,18 @@ async fn init(broker: &Url) -> Result<(AsyncClient, EventLoop)> {
                 .with_target(false)
                 .with_writer(File::create(Config::log()?)?)
                 // rumqttc is pretty verbose, ignore it
-                .with_filter(filter_fn(|meta| meta.target() != "rumqttc"))
+                .with_filter(filter_fn(|meta| !meta.target().contains("rumqttc")))
                 // mio tracing also pretty verbose
                 .with_filter(filter_fn(|meta| meta.target() != "mio::poll")),
         )
         .init();
     info!("Started MqtTUI: {broker}");
 
-    let name = env!("CARGO_PKG_NAME");
+    let name = format!(
+        "{}-{}",
+        env!("CARGO_PKG_NAME"),
+        petname(2, "-").unwrap_or_default()
+    );
 
     let mut options = MqttOptions::new(
         name,
